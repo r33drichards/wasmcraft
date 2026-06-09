@@ -94,10 +94,11 @@ function M.session(opts)
   local START, ENDT = "<WCSTART>", "<WCEND>"
   local S = { root = root }
 
+  local PARK = "\0wc_stdin\0" -- sentinel the reader yields when it needs input
   local function boot()
     local out, inbuf, inpos = {}, "", 1
     local function reader(maxlen)
-      while inpos > #inbuf do coroutine.yield() end      -- park until fed
+      while inpos > #inbuf do coroutine.yield(PARK) end  -- park until fed
       local c = inbuf:sub(inpos, inpos + maxlen - 1); inpos = inpos + #c; return c
     end
     local host = wasmcraft.wasi.make({
@@ -105,26 +106,36 @@ function M.session(opts)
       write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
     })
     local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit", chunk_cache = M._cache })
-    -- NB: no pcall here — Lua 5.1 forbids yielding across a pcall, and the stdin
-    -- reader yields. proc_exit (on halt) surfaces as a resume error we handle below.
+    -- NB: no pcall here — Lua 5.1 forbids yielding across a pcall, and the reader
+    -- yields. proc_exit (on halt) surfaces as a resume error handled below.
     local co = coroutine.create(function() inst:call("_start") end)
+    -- Resume the engine until it parks for stdin (or dies). On CC the compiled
+    -- code also yields for the watchdog (os.pullEvent via __tick); those yields
+    -- carry an event filter, not PARK — forward them to CC's scheduler and resume.
+    local function pump()
+      local args = {}
+      while true do
+        local res = { coroutine.resume(co, (table.unpack or unpack)(args)) }
+        if coroutine.status(co) == "dead" then
+          S._dead = true
+          if not res[1] and not (type(res[2]) == "table" and res[2][wasmcraft.wasi.EXIT]) then
+            error("picat session error: " .. tostring(res[2]))
+          end
+          return
+        end
+        if not res[1] then error("picat session error: " .. tostring(res[2])) end
+        if res[2] == PARK then return end                  -- waiting for next input
+        args = { os.pullEventRaw(res[2]) }                 -- forward a CC event yield
+      end
+    end
     S._feed = function(line)
       inbuf, inpos = line, 1
       for i = #out, 1, -1 do out[i] = nil end
-      local ok, err = coroutine.resume(co)
-      if coroutine.status(co) == "dead" then
-        S._dead = true
-        if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then
-          error("picat session error: " .. tostring(err))
-        end
-      elseif not ok then
-        error("picat session error: " .. tostring(err))
-      end
+      pump()
       return table.concat(out)
     end
     S._dead = false
-    local ok, err = coroutine.resume(co) -- boot to the first prompt (banner discarded)
-    if not ok then error("picat boot failed: " .. tostring(err)) end
+    pump() -- boot to the first prompt (banner discarded)
   end
   boot()
 
