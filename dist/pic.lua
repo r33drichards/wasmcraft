@@ -30,13 +30,32 @@ if type(peripheral) == "table" and peripheral.find then
 end
 if not opened then print("pic: no modem attached."); return end
 
+-- A busy/booting daemon services dns lookups too slowly for the 2s window
+-- (busy computers are throttled), so cache its id after first contact and ping
+-- it directly — addressed sends queue reliably with no timing window.
+local CACHE = ".pic_daemon_" .. name
+local function fread(p) local f = io.open(p, "r"); if not f then return nil end local d = f:read("*a"); f:close(); return d end
 local id
-for attempt = 1, 4 do
-  id = rednet.lookup(PROTO, name)
-  if id then break end
-  if attempt < 4 then print("pic: no answer from '" .. name .. "' (try " .. attempt .. "/4 - booting daemons answer slowly)") end
+local cached = tonumber(fread(CACHE) or "")
+if cached then
+  local pid = "pic:ping:" .. tostring(os.epoch and os.epoch("utc") or os.clock())
+  rednet.send(cached, { action = "ping", id = pid }, PROTO)
+  local t = os.clock()
+  while os.clock() - t < 15 do
+    local s, r = rednet.receive(PROTO, 15 - (os.clock() - t))
+    if s == cached and type(r) == "table" and r.id == pid then id = cached; break end
+  end
+  if not id then print("pic: cached daemon #" .. cached .. " silent for 15s - rediscovering") end
+end
+if not id then
+  for attempt = 1, 4 do
+    id = rednet.lookup(PROTO, name, 5)
+    if id then break end
+    if attempt < 4 then print("pic: no answer from '" .. name .. "' (try " .. attempt .. "/4 - busy daemons answer slowly)") end
+  end
 end
 if not id then print("pic: no picatd named '" .. name .. "' found on the network."); return end
+local h = io.open(CACHE, "w"); if h then h:write(tostring(id)); h:close() end
 
 local reqn = 0
 local function ask(m, timeout)

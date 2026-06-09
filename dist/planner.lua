@@ -67,16 +67,33 @@ local function daemon_solve()
     print("(no modem attached - can't reach a picatd daemon)")
     return nil
   end
-  -- a daemon that is mid-boot answers lookups slowly (it only processes events
-  -- between engine yields), so a single 2s lookup can miss it: retry a few times
+  -- A daemon that is mid-boot or mid-solve services events slowly (busy
+  -- computers get throttled by the server), so the 2s dns lookup window often
+  -- misses it entirely. Once we've EVER reached a daemon we cache its computer
+  -- id and go direct (addressed sends queue reliably; no timing window).
   local id
-  for attempt = 1, 4 do
-    if args[1] then id = rednet.lookup(PROTO, args[1])
-    else local hosts = { rednet.lookup(PROTO) }; id = hosts[1] end
-    if id then break end
-    print("(no picatd answered lookup " .. attempt .. "/4 - daemon may still be booting)")
+  local cached = tonumber(fread(".planner_daemon") or "")
+  if cached then
+    print("(pinging cached daemon #" .. cached .. ")")
+    local pid = "planner:ping:" .. tostring(os.epoch and os.epoch("utc") or os.clock())
+    rednet.send(cached, { action = "ping", id = pid }, PROTO)
+    local t = os.clock()
+    while os.clock() - t < 15 do
+      local s, r = rednet.receive(PROTO, 15 - (os.clock() - t))
+      if s == cached and type(r) == "table" and r.id == pid then id = cached; break end
+    end
+    if not id then print("(cached daemon #" .. cached .. " silent for 15s - rediscovering)") end
+  end
+  if not id then
+    for attempt = 1, 4 do
+      if args[1] then id = rednet.lookup(PROTO, args[1], 5)
+      else local hosts = { rednet.lookup(PROTO, nil, 5) }; id = hosts[1] end
+      if id then break end
+      print("(no picatd answered lookup " .. attempt .. "/4 - daemon may be busy or booting)")
+    end
   end
   if not id then return nil end
+  fwrite(".planner_daemon", tostring(id))
   local mid = "planner:" .. tostring(os.getComputerID and os.getComputerID() or 0) ..
     ":" .. tostring(os.epoch and os.epoch("utc") or os.clock())
   print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
