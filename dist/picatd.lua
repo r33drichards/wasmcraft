@@ -107,6 +107,9 @@ local function worker(sname, sess)
           sess.s = picat.session({ root = "." })
           print("picatd: session '" .. sname .. "' ready.")
         end
+        if job.sender then
+          print(("[%s] %s from %s started"):format(sname, tostring(job.msg.action), tostring(job.sender)))
+        end
         sess.busy = true
         local reply = handle(sess, job.msg, sname)
         sess.busy = false
@@ -141,6 +144,16 @@ local function receiver()
     elseif type(msg) == "table" then
       local sname = tostring(msg.session or "main"):gsub("[^%w_%-]", "_")
       local sess = getsession(sname)
+      -- a client that rebooted (chunk unload) or was Ctrl+T'd re-sends its job;
+      -- its OLD queued job will never be awaited — drop it so the queue doesn't
+      -- fill with orphans. (A job already RUNNING can't be stopped; it finishes
+      -- and its reply goes nowhere, which is harmless.)
+      for i = #sess.queue, 1, -1 do
+        if sess.queue[i].sender == sender then
+          table.remove(sess.queue, i)
+          print(("[%s] dropped stale queued job from %s (client re-sent)"):format(sname, tostring(sender)))
+        end
+      end
       sess.queue[#sess.queue + 1] = { sender = sender, msg = msg }
       local note
       if not sess.s then note = "booting session '" .. sname .. "' (~30-60s)"

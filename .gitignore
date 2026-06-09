@@ -20,3 +20,5 @@ csrc/sqlite3.h
 # test scratch
 *.wasmcraft_sqltest.db
 .wasmcraft_sqltest.db
+.planner_state
+.planner_result

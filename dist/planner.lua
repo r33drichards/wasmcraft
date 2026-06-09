@@ -8,8 +8,31 @@
 -- picat.wasm, e.g. on a floppy at /disk/).
 local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
 local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
+-- Durability: 'planner --install' re-runs on every boot. A finished solve is
+-- cached to .planner_result, so after a reboot (chunk unload) the animation
+-- resumes instantly; an interrupted solve restarts FROM THE BEGINNING (there is
+-- no mid-solve checkpoint) and says so. 'planner --fresh' discards the cache.
 local PROTO = "wcpicat"
 local args = { ... }
+local fresh, install = false, false
+for i = #args, 1, -1 do
+  if args[i] == "--fresh" then fresh = true; table.remove(args, i)
+  elseif args[i] == "--install" then install = true; table.remove(args, i) end
+end
+
+local STATE, RESULT = ".planner_state", ".planner_result"
+local function fexists(p) local f = io.open(p, "r"); if f then f:close(); return true end return false end
+local function fread(p) local f = io.open(p, "r"); if not f then return nil end local d = f:read("*a"); f:close(); return d end
+local function fwrite(p, s) local f = assert(io.open(p, "w")); f:write(s); f:close() end
+local function fdel(p)
+  if type(fs) == "table" and fs.delete then pcall(fs.delete, p) else pcall(os.remove, p) end
+end
+
+if install and type(fs) == "table" then
+  fwrite("startup.lua", 'shell.run("planner")\n')
+  print("planner: installed to startup.lua - re-runs on every boot")
+  print("planner: (cached solves re-render instantly; interrupted solves restart)")
+end
 
 -- ONE Picat program solves BOTH plans (mode carried in the planner state), so
 -- Picat boots only once. Goals chosen so the in-order route is much longer.
@@ -54,20 +77,29 @@ local function daemon_solve()
     print("(no picatd answered lookup " .. attempt .. "/4 - daemon may still be booting)")
   end
   if not id then return nil end
-  print("solving on picatd #" .. id .. " (session 'planner')...")
   local mid = "planner:" .. tostring(os.getComputerID and os.getComputerID() or 0) ..
     ":" .. tostring(os.epoch and os.epoch("utc") or os.clock())
+  print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
   rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
-  local deadline = os.clock() + 300
+  local t0 = os.clock()
+  local deadline, lastbeat = t0 + 600, t0
   while os.clock() < deadline do
-    local _, r = rednet.receive(PROTO, deadline - os.clock())
-    if type(r) == "table" and (r.id == mid or r.id == nil) then
-      if r.status then print("(" .. tostring(r.status) .. ")")
-      elseif r.ok then return r.output
+    -- short receive slices so we can heartbeat while waiting
+    local _, r = rednet.receive(PROTO, 5)
+    if r == nil then
+      if os.clock() - lastbeat >= 15 then
+        lastbeat = os.clock()
+        print(("(still waiting on daemon... %ds elapsed)"):format(os.clock() - t0))
+      end
+    elseif type(r) == "table" and (r.id == mid or r.id == nil) then
+      if r.status then print(("(daemon: %s) [%ds]"):format(tostring(r.status), os.clock() - t0))
+      elseif r.ok then
+        print(("(daemon answered in %ds)"):format(os.clock() - t0))
+        return r.output
       else print("daemon error: " .. tostring(r.output)); return nil end
     end
   end
-  print("(daemon timed out — trying a local boot instead)")
+  print("(daemon timed out after 600s - trying a local boot instead)")
   return nil
 end
 
@@ -116,10 +148,30 @@ local function parse_both(out)
   return plan(pathO), plan(pathF)
 end
 
-local out = daemon_solve() or local_solve()
+-- ---- durable solve: cache results, restart interrupted solves ---------------
+if fresh then fdel(RESULT); fdel(STATE); print("planner: --fresh, discarded cached solution") end
+local out = fread(RESULT)
+if out and #out > 0 then
+  print("planner: using cached solution from a previous run ('planner --fresh' re-solves)")
+else
+  if fexists(STATE) then
+    local attempt = (tonumber(fread(STATE)) or 1) + 1
+    print("planner: previous solve did NOT complete (reboot/chunk unload or error)")
+    print("planner: restarting from the beginning (attempt " .. attempt .. ") - no mid-solve checkpoint")
+    fwrite(STATE, tostring(attempt))
+  else
+    fwrite(STATE, "1")
+  end
+  out = daemon_solve() or local_solve()
+  fwrite(RESULT, out)
+  fdel(STATE)
+  print("planner: solution cached to " .. RESULT)
+end
 local A, B = parse_both(out)
 if #A.path == 0 or #B.path == 0 then
-  print("could not parse plans; raw output:"); print(out); return
+  print("could not parse plans; raw output:"); print(out)
+  fdel(RESULT) -- don't cache garbage
+  return
 end
 print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.path - 1))
 
