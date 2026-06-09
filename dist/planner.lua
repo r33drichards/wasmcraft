@@ -36,6 +36,8 @@ end
 
 -- ONE Picat program solves BOTH plans (mode carried in the planner state), so
 -- Picat boots only once. Goals chosen so the in-order route is much longer.
+-- Goals are SOLID: the turtle can never enter a goal cell; it claims a goal by
+-- standing on any orthogonally adjacent cell. (goal_cell facts must match Goals)
 local PROGRAM = [[
 import planner.
 main =>
@@ -46,13 +48,16 @@ main =>
   printf("PLAN ordered\n"), printf("PATH 0 0\n"), walk(Origin,P1),
   best_plan({Origin,Goals,free}, P2),
   printf("PLAN free\n"), printf("PATH 0 0\n"), walk(Origin,P2).
+goal_cell({4,4}). goal_cell({2,0}). goal_cell({0,3}).
+adjacent({X,Y},{Gx,Gy}) => D = abs(X-Gx)+abs(Y-Gy), D == 1.
 final({_Pos,Gs,_}) => Gs=[].
 action(F,T,A,C) ?=>
   F={{X,Y},Gs,M}, member({Dx,Dy},[{-1,0},{1,0},{0,-1},{0,1}]),
   Tx=X+Dx,Ty=Y+Dy, member(Tx,0..4),member(Ty,0..4),
+  not goal_cell({Tx,Ty}),
   T={{Tx,Ty},Gs,M}, A={move,{Tx,Ty}}, C=1.
-action(F,T,A,C) ?=> F={Pos,[Pos|Rest],ordered}, T={Pos,Rest,ordered}, A={mark,Pos}, C=1.
-action(F,T,A,C) ?=> F={Pos,Gs,free}, member(Pos,Gs), T={Pos,delete(Gs,Pos),free}, A={mark,Pos}, C=1.
+action(F,T,A,C) ?=> F={Pos,[G|Rest],ordered}, adjacent(Pos,G), T={Pos,Rest,ordered}, A={mark,G}, C=1.
+action(F,T,A,C) ?=> F={Pos,Gs,free}, member(G,Gs), adjacent(Pos,G), T={Pos,delete(Gs,G),free}, A={mark,G}, C=1.
 walk(_,[]) => true.
 walk(_,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n",Tx,Ty), walk({Tx,Ty},R).
 walk(P,[{mark,{Mx,My}}|R]) => printf("MARK %w %w\n",Mx,My), walk(P,R).
@@ -304,9 +309,10 @@ print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.p
 
 -- a short problem/solution blurb shown under the grids (<=3 sentences)
 local BLURB = string.format(
-  "Goal: from S, visit every goal G in the fewest steps. Left visits the goals " ..
-  "in the order given (%d moves); right lets Picat's planner pick the order (%d). " ..
-  "Same goals, but choosing the order finds the shorter route.", #A.path - 1, #B.path - 1)
+  "Goal: from S, get NEXT TO every goal G in the fewest steps - goals are solid " ..
+  "blocks the turtle can't walk through. Left serves them in the order given " ..
+  "(%d moves); right lets Picat's planner pick the order (%d). " ..
+  "Choosing the order finds the shorter route.", #A.path - 1, #B.path - 1)
 
 local function wrap(text, width)
   local out, line = {}, ""
