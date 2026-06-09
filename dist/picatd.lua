@@ -51,6 +51,10 @@ end
 
 print("picatd: booting Picat (~30-60s)...")
 local s = picat.session({ root = "." })
+-- warm-up: the first cl/main touches engine paths that compile lazily on first
+-- call; pay that cost here so the first real command is fast.
+print("picatd: warming up...")
+pcall(function() s:run('main => println(warm).') end)
 print("picatd: ready.")
 
 if served then
