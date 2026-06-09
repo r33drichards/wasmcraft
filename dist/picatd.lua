@@ -1,12 +1,16 @@
--- picatd — a resident Picat daemon. Boots Picat ONCE, then serves run/query/
--- reset requests over rednet, so any computer on the network can use it without
--- paying the ~30s boot each time.
+-- picatd — a resident multi-session Picat daemon. Serves named sessions over
+-- rednet: each session is its own warm Picat engine with its own request queue,
+-- and sessions time-slice against each other (one session's long run doesn't
+-- block another's). Boot is paid once per session, not per command.
 --   Usage: picatd [name]     (name defaults to the computer label, else "picat")
 -- Talk to it with the `pic` client, or any rednet message on protocol "wcpicat":
---   { action="run",   program="main => ..." }  -> { ok=bool, output=str }
---   { action="query", goal="X=2+3, println(X)." }
---   { action="reset" }                          -> fresh engine (clears state)
---   { action="ping" }                           -> { ok=true, output=name }
+--   { action="run",   program="main => ...", session="foo", id="x1" }
+--   { action="query", goal="X=2+3, println(X).", session="foo", id="x2" }
+--   { action="reset", session="foo" }      -> fresh engine for THAT session
+--   { action="ping" }                      -> daemon name + live session list
+-- Replies: { ok=bool, output=str, id=<echoed> }; interim { status="..."} notes
+-- (booting / queued at position N) are sent while a job waits. session defaults
+-- to "main", which is pre-booted and warmed at startup.
 local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
 local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
 local PROTO = "wcpicat"
@@ -49,58 +53,87 @@ if type(peripheral) == "table" and peripheral.find then
   peripheral.find("modem", function(n) rednet.open(n); served = true end)
 end
 
-print("picatd: booting Picat (~30-60s)...")
-local s = picat.session({ root = "." })
--- warm-up: the first cl/main touches engine paths that compile lazily on first
--- call; pay that cost here so the first real command is fast.
-print("picatd: warming up...")
-pcall(function() s:run('main => println(warm).') end)
-print("picatd: ready.")
+-- ---- multi-session control plane -------------------------------------------
+-- Each named session (pic -n foo) gets its OWN Picat engine and its OWN request
+-- queue, run by its own worker coroutine. The compiled engines yield to the
+-- event loop at loop back-edges, so two sessions' long runs genuinely time-slice
+-- against each other instead of head-of-line blocking. Within a session,
+-- requests run in order. The shared chunk cache means extra sessions boot
+-- without re-compiling any wasm functions (they only re-execute the bootstrap).
+local sessions = {} -- sname -> { queue = {jobs}, s = engine|nil, busy = bool }
+local tasks = {}    -- scheduler coroutines
+local function spawn(fn) tasks[#tasks + 1] = { co = coroutine.create(fn) } end
 
-if served then
-  rednet.host(PROTO, name)
-  print("picatd: serving as '" .. name .. "' on protocol '" .. PROTO .. "'.")
-else
-  print("picatd: no modem attached — attach one and restart to serve over rednet.")
-  return
+local function respond(sender, reply, id)
+  reply.id = id
+  if sender then rednet.send(sender, reply, PROTO) end
 end
 
-local function handle(msg)
-  if type(msg) ~= "table" then return { ok = false, output = "bad request" } end
-  if msg.action == "ping" then return { ok = true, output = name }
-  elseif msg.action == "reset" then s:reset(); return { ok = true, output = "reset" }
+local function handle(sess, msg, sname)
+  if msg.action == "reset" then sess.s:reset(); return { ok = true, output = "reset" }
   elseif msg.action == "run" then
-    local ok, out = pcall(function() return s:run(msg.program or "") end)
+    -- per-session temp file: sessions share the fs root, and interleaved runs
+    -- must not clobber each other's program file
+    local ok, out = pcall(function() return sess.s:run(msg.program or "", "_sess_" .. sname .. ".pi") end)
     return { ok = ok, output = ok and out or tostring(out) }
   elseif msg.action == "query" then
-    local ok, out = pcall(function() return s:query(msg.goal or "") end)
+    local ok, out = pcall(function() return sess.s:query(msg.goal or "") end)
     return { ok = ok, output = ok and out or tostring(out) }
   end
   return { ok = false, output = "unknown action: " .. tostring(msg.action) }
 end
 
-local function respond(sender, reply, id)
-  reply.id = id
-  rednet.send(sender, reply, PROTO)
+local function worker(sname, sess)
+  return function()
+    while true do
+      if #sess.queue == 0 then
+        os.pullEvent("wcpicat_work")
+      else
+        local job = table.remove(sess.queue, 1)
+        if not sess.s then
+          print("picatd: booting session '" .. sname .. "'...")
+          sess.s = picat.session({ root = "." })
+          print("picatd: session '" .. sname .. "' ready.")
+        end
+        sess.busy = true
+        local reply = handle(sess, job.msg, sname)
+        sess.busy = false
+        respond(job.sender, reply, job.msg.id)
+        if job.sender then
+          print(("[%s] %s from %s -> %s%s"):format(sname, tostring(job.msg.action),
+            tostring(job.sender), reply.ok and "ok" or "err",
+            #sess.queue > 0 and (" (" .. #sess.queue .. " queued)") or ""))
+        end
+      end
+    end
+  end
 end
 
--- Concurrent clients: a receiver coroutine accepts requests while a worker runs
--- the (single) Picat engine. The compiled engine yields to the event loop at
--- loop back-edges, so the receiver stays responsive during long runs: pings are
--- answered instantly and queued jobs get an immediate ACK with their position.
--- Requests carry an id; replies echo it so clients match them up.
-local queue, busy = {}, false
+local function getsession(sname)
+  local sess = sessions[sname]
+  if not sess then
+    sess = { queue = {}, busy = false }
+    sessions[sname] = sess
+    spawn(worker(sname, sess))
+  end
+  return sess
+end
 
 local function receiver()
   while true do
     local sender, msg = rednet.receive(PROTO)
     if type(msg) == "table" and msg.action == "ping" then
-      respond(sender, { ok = true, output = name }, msg.id)
+      local names = {}
+      for sn in pairs(sessions) do names[#names + 1] = sn end
+      respond(sender, { ok = true, output = name .. " sessions: " .. table.concat(names, ",") }, msg.id)
     elseif type(msg) == "table" then
-      queue[#queue + 1] = { sender = sender, msg = msg }
-      if busy or #queue > 1 then
-        respond(sender, { ok = true, status = "queued", position = #queue }, msg.id)
-      end
+      local sname = tostring(msg.session or "main"):gsub("[^%w_%-]", "_")
+      local sess = getsession(sname)
+      sess.queue[#sess.queue + 1] = { sender = sender, msg = msg }
+      local note
+      if not sess.s then note = "booting session '" .. sname .. "' (~30-60s)"
+      elseif sess.busy or #sess.queue > 1 then note = "queued at position " .. #sess.queue end
+      if note then respond(sender, { ok = true, status = note }, msg.id) end
       os.queueEvent("wcpicat_work")
     else
       respond(sender, { ok = false, output = "bad request" }, nil)
@@ -108,28 +141,39 @@ local function receiver()
   end
 end
 
-local function worker()
-  while true do
-    if #queue == 0 then
-      os.pullEvent("wcpicat_work")
-    else
-      local job = table.remove(queue, 1)
-      busy = true
-      local reply = handle(job.msg)
-      busy = false
-      respond(job.sender, reply, job.msg.id)
-      print(("%s from %s -> %s%s"):format(tostring(job.msg.action), tostring(job.sender),
-        reply.ok and "ok" or "err", #queue > 0 and (" (" .. #queue .. " queued)") or ""))
+if not served then
+  print("picatd: no modem attached — attach one and restart to serve over rednet.")
+  return
+end
+rednet.host(PROTO, name)
+print("picatd: serving as '" .. name .. "' on protocol '" .. PROTO .. "'.")
+
+-- warm the default session before serving: boot + a throwaway run so the first
+-- real command (and every later session, via the shared chunk cache) is fast.
+print("picatd: booting session 'main' (~30-60s)...")
+local mainsess = getsession("main")
+mainsess.s = picat.session({ root = "." })
+pcall(function() mainsess.s:run('main => println(warm).') end)
+print("picatd: ready.")
+
+-- ---- scheduler: like parallel, but coroutines can be added at runtime -------
+spawn(receiver)
+local ev = {}
+while true do
+  for i = #tasks, 1, -1 do
+    local t = tasks[i]
+    if t.filter == nil or t.filter == ev[1] or ev[1] == "terminate" then
+      local ok, f = coroutine.resume(t.co, (table.unpack or unpack)(ev))
+      if not ok then
+        print("picatd: task error: " .. tostring(f))
+        table.remove(tasks, i)
+      elseif coroutine.status(t.co) == "dead" then
+        table.remove(tasks, i)
+      else
+        t.filter = f
+      end
     end
   end
-end
-
-if parallel then
-  parallel.waitForAll(receiver, worker)
-else -- non-CC fallback: serial serve loop
-  while true do
-    local sender, msg = rednet.receive(PROTO)
-    local reply = handle(msg)
-    respond(sender, reply, type(msg) == "table" and msg.id or nil)
-  end
+  ev = { os.pullEventRaw() }
+  if ev[1] == "terminate" then print("picatd: stopped.") return end
 end

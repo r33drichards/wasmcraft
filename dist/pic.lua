@@ -1,15 +1,24 @@
--- pic — client for a picatd daemon. Sends a Picat program/query to a named
--- daemon over rednet and prints the result. No boot cost: the daemon stays warm.
---   pic <name> <file.pi>     run a program file on the daemon
---   pic <name> -e "Goal."    run a raw Picat goal/query
---   pic <name> -i            interactive shell (a remote Picat> prompt)
---   pic <name> --reset       reset the daemon to a fresh engine
---   pic <name>               read a program from the terminal (end with a "." line)
+-- pic — client for a picatd daemon. Sends Picat programs/queries to a named
+-- daemon over rednet and prints results. The daemon keeps warm engines, so
+-- there's no boot cost per command.
+--   pic <name> [-n sess] <file.pi>    run a program file
+--   pic <name> [-n sess] -e "Goal."   run a raw Picat goal/query
+--   pic <name> [-n sess] -i           interactive shell (remote Picat> prompt)
+--   pic <name> [-n sess] --reset      reset that session to a fresh engine
+--   pic <name> [-n sess]              type a program; end with a "." line
+-- -n names YOUR session on the daemon: each named session is its own isolated
+-- Picat engine with its own queue, served concurrently with other sessions.
+-- Without -n you share the default "main" session.
 local PROTO = "wcpicat"
 
 local a = { ... }
+-- extract -n <session> wherever it appears
+local session
+for i = #a - 1, 1, -1 do
+  if a[i] == "-n" then session = a[i + 1]; table.remove(a, i + 1); table.remove(a, i) end
+end
 local name = a[1]
-if not name then print("usage: pic <name> [file.pi | -e \"goal.\" | -i | --reset]"); return end
+if not name then print("usage: pic <name> [-n session] [file.pi | -e \"goal.\" | -i | --reset]"); return end
 
 -- open every modem
 local opened = false
@@ -24,6 +33,7 @@ if not id then print("pic: no picatd named '" .. name .. "' found on the network
 local reqn = 0
 local function ask(m, timeout)
   reqn = reqn + 1
+  m.session = session
   m.id = tostring(os.getComputerID and os.getComputerID() or 0) .. ":" .. reqn .. ":" ..
     tostring(os.epoch and os.epoch("utc") or os.clock())
   rednet.send(id, m, PROTO)
@@ -31,8 +41,8 @@ local function ask(m, timeout)
   while os.clock() < deadline do
     local _, r = rednet.receive(PROTO, deadline - os.clock())
     if type(r) == "table" and (r.id == m.id or r.id == nil) then
-      if r.status == "queued" then
-        print("(daemon busy — queued at position " .. tostring(r.position) .. ")")
+      if r.status then
+        print("(" .. tostring(r.status) .. ")")
       else
         return r
       end
@@ -40,11 +50,12 @@ local function ask(m, timeout)
   end
 end
 
--- interactive shell: a remote Picat> prompt served by the warm daemon
+-- interactive shell: a remote prompt against this session's warm engine
 if a[2] == "-i" then
-  print("pic: shell on '" .. name .. "' — 'reset.' resets, 'exit' quits.")
+  local label = (session or "main") .. "@" .. name
+  print("pic: shell on " .. label .. " — 'reset' resets this session, 'exit' quits.")
   while true do
-    write("Picat> ")
+    write(label .. "> ")
     local line = read()
     if line == "exit" or line == "quit" or line == "halt." then break end
     if line == "reset." or line == "reset" then
