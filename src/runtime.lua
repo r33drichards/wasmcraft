@@ -203,6 +203,18 @@ function M.make(inst)
 
   E.ZERO64 = I.ZERO
   E.__unreachable = function() error("wasm trap: unreachable") end
+
+  -- Cooperative yield for CC's watchdog: compiled loop back-edges call __tick;
+  -- every Nth call it yields to the event loop (queueEvent/pullEvent resumes in
+  -- the same tick, just resetting the "too long without yielding" timer).
+  if type(os) == "table" and os.queueEvent and os.pullEvent then
+    E.__yield = function() os.queueEvent("wasmcraft"); os.pullEvent("wasmcraft") end
+  end
+  local ticks = 0
+  E.__tick = function()
+    ticks = ticks + 1
+    if ticks >= 100000 then ticks = 0; if E.__yield then E.__yield() end end
+  end
   return E
 end
 

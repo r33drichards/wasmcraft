@@ -25,6 +25,11 @@ end
 
 local M = {}
 
+-- Inject a yield tick at loop back-edges so long compiled runs cooperate with
+-- CC:Tweaked's "too long without yielding" watchdog. Auto-on only under CC (where
+-- os.queueEvent exists); standalone Cobalt leaves it off for full speed.
+M.yield_in_loops = type(os) == "table" and rawget(os, "queueEvent") ~= nil
+
 -- op -> helper name. These pop their args and push one result (the helper does
 -- the work). Binary unless noted; order of args = stack order.
 local HELPER = {}
@@ -176,6 +181,14 @@ local function build_fb(mod, fidx)
     fb:jmp(fr.exit)
   end
 
+  -- ENV.__tick() at a loop back-edge (only when yield-in-loops is enabled)
+  local function emit_tick(fr)
+    if M.yield_in_loops and fr.kind == "loop" then
+      local t = base + vsp
+      fb:GETTABLE(t, renv, kop(fb:kstr("__tick"))); fb:CALL(t, 1, 1)
+    end
+  end
+
   local function do_end()
     local fr = ctrl[#ctrl]; ctrl[#ctrl] = nil
     if fr.kind == "block" then fb:place(fr.exit)
@@ -254,10 +267,12 @@ local function build_fb(mod, fidx)
       ctrl[#ctrl + 1] = fr
     elseif op == "else" then do_else()
     elseif op == "end" then do_end()
-    elseif op == "br" then branch_to(ctrl[#ctrl - ins.label]); fb:anchor(); go_dead()
+    elseif op == "br" then
+      local fr = ctrl[#ctrl - ins.label]; emit_tick(fr); branch_to(fr); fb:anchor(); go_dead()
     elseif op == "br_if" then
       vsp = vsp - 1; local cond = base + vsp
       local fr = ctrl[#ctrl - ins.label]
+      emit_tick(fr)
       if fr.br_arity == 0 then
         fb:EQ(0, cond, kop(k0)); fb:jmp(fr.exit)
       else

@@ -1,13 +1,20 @@
--- Run a WASI "command" .wasm module through the pure-Lua interpreter.
--- Usage (from project root): tools/cobalt run.lua <module.wasm> [args...]
--- Works on Cobalt (the CC:Tweaked engine) and on lua5.4.
+-- Run a WASI "command" .wasm module.
+-- Usage (from project root): tools/cobalt run.lua [--jit] <module.wasm> [args...]
+--   (default)  interpreted — portable, yields to CC's event loop
+--   --jit      compile to Cobalt bytecode and run natively (Cobalt only, ~7-13x;
+--              falls back to interpreted on other VMs)
 package.path = "src/?.lua;" .. package.path
 local wasm = require("wasm")
 local wasi = require("wasi")
 
 local args = { ... }
+local mode = "interp"
+while args[1] == "--jit" or args[1] == "--compile" or args[1] == "--interp" do
+  if args[1] ~= "--interp" then mode = "jit" end
+  table.remove(args, 1)
+end
 local path = args[1]
-if not path then error("usage: run.lua <module.wasm> [args...]") end
+if not path then error("usage: run.lua [--jit] <module.wasm> [args...]") end
 
 local f = assert(io.open(path, "rb"))
 local bytes = f:read("*a")
@@ -23,7 +30,7 @@ local host = wasi.make({
   writeerr = io.write,
   args = prog_args,
 })
-local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host })
+local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = mode })
 
 local ok, err = pcall(function() inst:call("_start") end)
 
