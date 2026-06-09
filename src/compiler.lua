@@ -361,8 +361,12 @@ local function evalConst(inst, instrs)
   return v
 end
 
-function M.instantiate(module, imports)
+-- opts.chunk_cache: an optional table (gi -> compiled bytecode string, or the
+-- marker "interp"). Reusing it across instances of the SAME module skips codegen
+-- on every instance after the first (compile-once, instantiate-many).
+function M.instantiate(module, imports, opts)
   imports = imports or {}
+  local chunk_cache = opts and opts.chunk_cache
   local loader = loadstring or load
   local inst = { module = module }
 
@@ -406,23 +410,34 @@ function M.instantiate(module, imports)
     local gi = module.numImportedFuncs + (j - 1)
     iinst.functions[gi] = delegate(gi)
     inst.funcs[gi] = function(...)
-      local function via(compile) return loader(compile(module, j), "wasmfn#" .. gi)(ENV) end
-      local fn
-      if M._force_oversized then
-        local ok, f = pcall(via, M.compile_oversized); if ok then fn = f end
-      else
-        local ok, f = pcall(via, M.compile_func)
-        if ok then fn = f else
-          -- too large for a single Lua function: relax jumps via trampolines
-          local ok2, f2 = pcall(via, M.compile_oversized); if ok2 then fn = f2 end
-        end
-      end
-      if fn then
-        inst.funcs[gi] = fn
-      else
+      local function set_interp()
         inst.fallbacks[gi] = true
         iinst.functions[gi] = { type = functype_of(module, gi), code = module.codes[j] }
         inst.funcs[gi] = function(...) return (table.unpack or unpack)(interp.run(iinst, gi, { ... })) end
+      end
+      local cached = chunk_cache and chunk_cache[gi]
+      if cached == "interp" then
+        set_interp()
+      elseif cached then
+        inst.funcs[gi] = loader(cached, "wasmfn#" .. gi)(ENV)
+      else
+        -- generate the bytecode chunk once (the expensive step), then cache it.
+        local chunk
+        if M._force_oversized then
+          local ok, c = pcall(M.compile_oversized, module, j); if ok then chunk = c end
+        else
+          local ok, c = pcall(M.compile_func, module, j)
+          if ok then chunk = c else
+            local ok2, c2 = pcall(M.compile_oversized, module, j); if ok2 then chunk = c2 end
+          end
+        end
+        if chunk then
+          if chunk_cache then chunk_cache[gi] = chunk end
+          inst.funcs[gi] = loader(chunk, "wasmfn#" .. gi)(ENV)
+        else
+          if chunk_cache then chunk_cache[gi] = "interp" end
+          set_interp()
+        end
       end
       return inst.funcs[gi](...)
     end

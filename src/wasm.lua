@@ -26,7 +26,7 @@ end
 function M.instantiate(module, imports, opts)
   local mode = opts and opts.mode or "interp"
   if (mode == "jit" or mode == "compile") and is_cobalt() then
-    return require("compiler").instantiate(module, imports)
+    return require("compiler").instantiate(module, imports, opts)
   end
   return interp.instantiate(module, imports)
 end

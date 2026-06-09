@@ -1,36 +1,36 @@
--- planner — solve a Picat planner (grid pathfinding around a wall) on the
--- wasmcraft compiler and VISUALIZE it on a CC:Tweaked monitor.
---   Usage: planner            (auto-finds picat.wasm on a floppy at /disk/)
---          planner <picat.wasm path>
--- Picat's best_plan finds the shortest order-free path visiting every goal.
+-- planner — Picat's best_plan, two ways, side by side on a CC monitor, looping.
+-- LEFT: visit goals IN ORDER.  RIGHT: visit them in ANY order (shortest).
+-- Same goals; the planner picks the cheaper order on the right, so it's shorter.
+-- (after Hillel Wayne's "Planner programming blows my mind")
+--   Usage: planner   (auto-finds picat.wasm on a floppy at /disk/)
 local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
 local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
 
+-- ONE Picat program solves BOTH plans (mode carried in the planner state), so
+-- Picat boots only once. Goals chosen so the in-order route is much longer.
 local PROGRAM = [[
 import planner.
-import util.
 main =>
-  Origin = {0,0}, Goals = [{4,4},{4,0}], Walls = [{2,1},{2,2},{2,3}],
-  best_plan({Origin,Goals,Walls}, Plan),
-  printf("BOUNDS 4 4\n"), printf("START %w %w\n", Origin[1], Origin[2]),
-  foreach({Gx,Gy} in Goals) printf("GOAL %w %w\n", Gx, Gy) end,
-  foreach({Wx,Wy} in Walls) printf("WALL %w %w\n", Wx, Wy) end,
-  printf("PATH %w %w\n", Origin[1], Origin[2]),
-  walk(Origin, Plan).
-final({_Pos,Goals,_}) => Goals = [].
-action(From,To,Action,Cost) ?=>
-  From = {{Fx,Fy},Goals,Walls}, member({Dx,Dy},[{-1,0},{1,0},{0,-1},{0,1}]),
-  Tx=Fx+Dx, Ty=Fy+Dy, member(Tx,0..4), member(Ty,0..4), not member({Tx,Ty},Walls),
-  To = {{Tx,Ty},Goals,Walls}, Action={move,{Tx,Ty}}, Cost=1.
-action(From,To,Action,Cost) ?=>
-  From = {Pos,Goals,Walls}, member(Pos,Goals),
-  To = {Pos,delete(Goals,Pos),Walls}, Action={mark,Pos}, Cost=1.
-walk(_, []) => true.
-walk(_P,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n", Tx, Ty), walk({Tx,Ty}, R).
-walk(P,[{mark,_}|R]) => walk(P, R).
+  Origin={0,0}, Goals=[{4,4},{0,4},{4,0}],
+  printf("BOUNDS 4 4\n"), printf("START 0 0\n"),
+  foreach({Gx,Gy} in Goals) printf("GOAL %w %w\n",Gx,Gy) end,
+  best_plan({Origin,Goals,ordered}, P1),
+  printf("PLAN ordered\n"), printf("PATH 0 0\n"), walk(Origin,P1),
+  best_plan({Origin,Goals,free}, P2),
+  printf("PLAN free\n"), printf("PATH 0 0\n"), walk(Origin,P2).
+final({_Pos,Gs,_}) => Gs=[].
+action(F,T,A,C) ?=>
+  F={{X,Y},Gs,M}, member({Dx,Dy},[{-1,0},{1,0},{0,-1},{0,1}]),
+  Tx=X+Dx,Ty=Y+Dy, member(Tx,0..4),member(Ty,0..4),
+  T={{Tx,Ty},Gs,M}, A={move,{Tx,Ty}}, C=1.
+action(F,T,A,C) ?=> F={Pos,[Pos|Rest],ordered}, T={Pos,Rest,ordered}, A={mark,Pos}, C=1.
+action(F,T,A,C) ?=> F={Pos,Gs,free}, member(Pos,Gs), T={Pos,delete(Gs,Pos),free}, A={mark,Pos}, C=1.
+walk(_,[]) => true.
+walk(_,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n",Tx,Ty), walk({Tx,Ty},R).
+walk(P,[{mark,_}|R]) => walk(P,R).
 ]]
 
--- ---- bootstrap deps --------------------------------------------------------
+-- ---- bootstrap -------------------------------------------------------------
 local function ensure(file, url)
   if type(fs) == "table" and fs.open and not fs.exists(file) then
     io.write("fetching " .. file .. " ... ")
@@ -38,97 +38,101 @@ local function ensure(file, url)
     local h = fs.open(file, "wb"); h.write(r.readAll()); h.close(); r.close(); print("ok")
   end
 end
-local function find(cands)
-  for _, p in ipairs(cands) do local f = io.open(p, "rb"); if f then f:close(); return p end end
-end
-ensure("wasmcraft", BUNDLE_URL)
-ensure("picat.lua", PICATLIB_URL)
+local function find(c) for _, p in ipairs(c) do local f = io.open(p, "rb"); if f then f:close(); return p end end end
+ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
 local picat = assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
-local args = { ... }
-picat.modulePath = args[1] or find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
+picat.modulePath = (({ ... })[1]) or find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
   "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" }) or "disk/picat.wasm"
 
--- ---- find the monitor up front, and SAY what we found ----------------------
-local mon = (type(peripheral) == "table") and peripheral.find and peripheral.find("monitor")
-if mon then
-  print("monitor found: drawing there.")
-else
-  print("NO MONITOR found — make sure the computer is directly touching the monitor")
-  print("(or connected by a wired modem). Falling back to the terminal.")
-end
-
--- ---- run + parse -----------------------------------------------------------
-print("solving with Picat (compiles once, ~30-60s)...")
-local out = picat.run(PROGRAM, { root = "." })
-
-local bounds, start, goals, walls, path = { x = 4, y = 4 }, { x = 0, y = 0 }, {}, {}, {}
-local goalset, wallset = {}, {}
-for line in out:gmatch("[^\n]+") do
-  local k, a, b = line:match("(%u+)%s+(%-?%d+)%s+(%-?%d+)")
-  if k == "BOUNDS" then bounds = { x = tonumber(a), y = tonumber(b) }
-  elseif k == "START" then start = { x = tonumber(a), y = tonumber(b) }
-  elseif k == "GOAL" then goals[#goals + 1] = { x = tonumber(a), y = tonumber(b) }; goalset[a .. "," .. b] = true
-  elseif k == "WALL" then walls[#walls + 1] = { x = tonumber(a), y = tonumber(b) }; wallset[a .. "," .. b] = true
-  elseif k == "PATH" then path[#path + 1] = { x = tonumber(a), y = tonumber(b) } end
-end
-local function isgoal(x, y) return goalset[x .. "," .. y] end
-local function iswall(x, y) return wallset[x .. "," .. y] end
-
--- ---- monitor renderer: big centered colored cells filling the screen -------
-local function render_monitor()
-  local cols = colors or colours
-  mon.setTextScale(1)
-  local W, H = mon.getSize()
-  local gw, gh = bounds.x + 1, bounds.y + 1
-  local cw = math.max(1, math.floor(W / gw))
-  local ch = math.max(1, math.floor((H - 2) / gh))
-  local ox = math.floor((W - cw * gw) / 2)
-  local oy = 1
-  local function fill(gx, gy, bg, label, fg)
-    local sx, sy = ox + gx * cw, oy + (bounds.y - gy) * ch
-    mon.setBackgroundColor(bg)
-    for r = 0, ch - 1 do mon.setCursorPos(sx + 1, sy + 1 + r); mon.write(string.rep(" ", cw)) end
-    if label then
-      mon.setTextColor(fg or cols.white)
-      mon.setCursorPos(sx + math.floor(cw / 2) + 1, sy + math.floor(ch / 2) + 1)
-      mon.write(label)
+-- one combined run -> shared grid + two paths (ordered, free)
+local function parse_both(out)
+  local bounds, start, goals, gset = { x = 4, y = 4 }, { x = 0, y = 0 }, {}, {}
+  local pathO, pathF, cur = {}, {}, nil
+  for line in out:gmatch("[^\n]+") do
+    if line == "PLAN ordered" then cur = pathO
+    elseif line == "PLAN free" then cur = pathF
+    else
+      local k, a, b = line:match("(%u+)%s+(%-?%d+)%s+(%-?%d+)")
+      if k == "BOUNDS" then bounds = { x = tonumber(a), y = tonumber(b) }
+      elseif k == "START" then start = { x = tonumber(a), y = tonumber(b) }
+      elseif k == "GOAL" then goals[#goals + 1] = { x = tonumber(a), y = tonumber(b) }; gset[a .. "," .. b] = true
+      elseif k == "PATH" and cur then cur[#cur + 1] = { x = tonumber(a), y = tonumber(b) } end
     end
   end
-  mon.setBackgroundColor(cols.black); mon.clear()
-  for gy = 0, bounds.y do for gx = 0, bounds.x do
-    fill(gx, gy, iswall(gx, gy) and cols.brown or cols.gray)
-  end end
-  for _, g in ipairs(goals) do fill(g.x, g.y, cols.orange, "G", cols.black) end
-  fill(start.x, start.y, cols.lime, "S", cols.black)
-  for i = 1, #path do
-    local p = path[i]
-    if i > 1 then local pv = path[i - 1]; fill(pv.x, pv.y, isgoal(pv.x, pv.y) and cols.red or cols.blue) end
-    fill(p.x, p.y, cols.white)
-    if sleep then sleep(0.2) end
-  end
-  local last = path[#path]; fill(last.x, last.y, isgoal(last.x, last.y) and cols.red or cols.blue)
-  mon.setBackgroundColor(cols.black); mon.setTextColor(cols.white)
-  mon.setCursorPos(1, H); mon.write((#path - 1) .. " moves, " .. #goals .. " goals")
+  local function plan(path) return { bounds = bounds, start = start, goals = goals, gset = gset, path = path } end
+  return plan(pathO), plan(pathF)
 end
 
-local function render_ascii()
-  local visited = {}; for _, p in ipairs(path) do visited[p.x .. "," .. p.y] = true end
-  print("+" .. string.rep("-", bounds.x + 1) .. "+")
-  for y = bounds.y, 0, -1 do
+print("booting Picat + solving both plans (~30-60s, one boot)...")
+local A, B = parse_both(picat.run(PROGRAM, { root = "." }))
+print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.path - 1))
+
+-- ---- monitor: two grids side by side, animation loops -----------------------
+local function render_monitor(mon)
+  local C = colors or colours
+  mon.setTextScale(1)
+  local W, H = mon.getSize()
+  local gw, gh = A.bounds.x + 1, A.bounds.y + 1
+  local cw = math.max(1, math.floor((W - 3) / (2 * gw)))   -- two grids + a gap
+  local ch = math.max(1, math.floor((H - 2) / gh))
+  local gpx = cw * gw
+  local ox1, ox2, oy = 0, gpx + 3, 2
+  local function fill(ox, gx, gy, bg, label, fg)
+    local sx, sy = ox + gx * cw, oy + (A.bounds.y - gy) * ch
+    mon.setBackgroundColor(bg)
+    for r = 0, ch - 1 do mon.setCursorPos(sx + 1, sy + 1 + r); mon.write(string.rep(" ", cw)) end
+    if label then mon.setTextColor(fg or C.white); mon.setCursorPos(sx + math.floor(cw / 2) + 1, sy + math.floor(ch / 2) + 1); mon.write(label) end
+  end
+  local function base(ox, p)
+    for gy = 0, p.bounds.y do for gx = 0, p.bounds.x do fill(ox, gx, gy, C.gray) end end
+    for _, g in ipairs(p.goals) do fill(ox, g.x, g.y, C.orange, "G", C.black) end
+    fill(ox, p.start.x, p.start.y, C.lime, "S", C.black)
+  end
+  local function title(ox, text, col)
+    mon.setBackgroundColor(C.black); mon.setTextColor(col); mon.setCursorPos(ox + 1, 1); mon.write(text)
+  end
+  while true do
+    mon.setBackgroundColor(C.black); mon.clear()
+    title(ox1, "in order: " .. (#A.path - 1), C.yellow)
+    title(ox2, "shortest: " .. (#B.path - 1), C.lime)
+    base(ox1, A); base(ox2, B)
+    local steps = math.max(#A.path, #B.path)
+    for i = 1, steps do
+      for _, pr in ipairs({ { ox1, A, C.yellow }, { ox2, B, C.cyan } }) do
+        local ox, p, tc = pr[1], pr[2], pr[3]
+        if i <= #p.path then
+          if i > 1 then local v = p.path[i - 1]; fill(ox, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc) end
+          local h = p.path[i]; fill(ox, h.x, h.y, C.white)
+        end
+      end
+      if sleep then sleep(0.18) end
+    end
+    if sleep then sleep(1.2) end
+  end
+end
+
+local function render_ascii(p, label)
+  print(label .. ": " .. (#p.path - 1) .. " moves")
+  local vis = {}; for _, q in ipairs(p.path) do vis[q.x .. "," .. q.y] = true end
+  print("+" .. string.rep("-", p.bounds.x + 1) .. "+")
+  for y = p.bounds.y, 0, -1 do
     local row = {}
-    for x = 0, bounds.x do
-      local c = " "
-      if visited[x .. "," .. y] then c = "*" end
-      if iswall(x, y) then c = "#" end
-      if isgoal(x, y) then c = "G" end
-      if x == start.x and y == start.y then c = "O" end
+    for x = 0, p.bounds.x do
+      local c = vis[x .. "," .. y] and "*" or " "
+      if p.gset[x .. "," .. y] then c = "G" end
+      if x == p.start.x and y == p.start.y then c = "O" end
       row[#row + 1] = c
     end
     print("|" .. table.concat(row) .. "|")
   end
-  print("+" .. string.rep("-", bounds.x + 1) .. "+")
+  print("+" .. string.rep("-", p.bounds.x + 1) .. "+")
 end
 
-if #path == 0 then print("no plan found / parse error; raw output:\n" .. out); return end
-print("solved: " .. (#path - 1) .. " moves around the wall")
-if mon then render_monitor() else render_ascii() end
+local mon = (type(peripheral) == "table") and peripheral.find and peripheral.find("monitor")
+if mon then
+  print("monitor found — animating (hold Ctrl+T to stop).")
+  render_monitor(mon)
+else
+  print("NO MONITOR — drawing to terminal (computer must touch the monitor to use it).")
+  render_ascii(A, "in order"); render_ascii(B, "shortest")
+end
