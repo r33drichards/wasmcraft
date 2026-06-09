@@ -94,10 +94,64 @@ local function daemon_solve()
   end
   if not id then return nil end
   fwrite(".planner_daemon", tostring(id))
-  local mid = "planner:" .. tostring(os.getComputerID and os.getComputerID() or 0) ..
-    ":" .. tostring(os.epoch and os.epoch("utc") or os.clock())
-  print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
-  rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
+  local myid = tostring(os.getComputerID and os.getComputerID() or 0)
+  local myprefix = "planner:" .. myid .. ":"
+  local mid = myprefix .. tostring(os.epoch and os.epoch("utc") or os.clock())
+
+  -- our previous run may still be solving on the daemon (we rebooted / were
+  -- terminated). Its reply is addressed to this computer with our id prefix, so
+  -- we can simply ATTACH and take its result - or cancel it and start over.
+  local function probe_our_job()
+    local sid = myprefix .. "probe" .. math.floor(os.clock())
+    rednet.send(id, { action = "status", id = sid }, PROTO)
+    local t = os.clock()
+    while os.clock() - t < 10 do
+      local s, r = rednet.receive(PROTO, 10 - (os.clock() - t))
+      if s == id and type(r) == "table" and r.id == sid then
+        local line = tostring(r.output or ""):match("planner:[^\n]*") or ""
+        if line:find("busy") and line:find("from " .. myid .. "%f[%D]") then return line end
+        return nil
+      end
+    end
+    return nil
+  end
+  local function prompt_choice(msg, secs) -- single keypress with timeout; nil = timed out
+    if not (os.startTimer and os.pullEvent) then return nil end
+    io.write(msg)
+    local timer = os.startTimer(secs)
+    while true do
+      local ev, p = os.pullEvent()
+      if ev == "char" then print("") return tostring(p):lower()
+      elseif ev == "timer" and p == timer then print("") return nil end
+    end
+  end
+
+  local attach = false
+  local busyline = probe_our_job()
+  if busyline then
+    print("(our previous job is STILL RUNNING: " .. busyline .. ")")
+    local c = prompt_choice("attach to it (a) or cancel + restart (c)? auto-attach in 10s: ", 10)
+    if c == "c" then
+      print("(cancelling the in-flight job...)")
+      local cid = myprefix .. "cancel" .. math.floor(os.clock())
+      rednet.send(id, { action = "cancel", session = "planner", id = cid }, PROTO)
+      local t = os.clock()
+      while os.clock() - t < 10 do
+        local s, r = rednet.receive(PROTO, 10 - (os.clock() - t))
+        if s == id and type(r) == "table" and r.id == cid then break end
+      end
+    else
+      attach = true
+      print("(attaching - will take the running job's result when it finishes)")
+    end
+  end
+
+  if attach then
+    print("waiting on picatd #" .. id .. "'s in-flight job (session 'planner')")
+  else
+    print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
+    rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
+  end
   -- LIVENESS-BASED deadline: a long solve is fine as long as status polls show
   -- the daemon working. We only give up when the daemon stops answering, or it
   -- goes idle without our reply twice (job lost, e.g. daemon rebooted) — in
@@ -145,13 +199,17 @@ local function daemon_solve()
           end
         end
       end
-    elseif type(r) == "table" and (r.id == mid or r.id == nil) then
+    elseif type(r) == "table" and (r.id == mid or r.id == nil or
+      (type(r.id) == "string" and r.id:sub(1, #myprefix) == myprefix)) then
+      -- prefix match adopts replies to ANY of our jobs (e.g. an attached orphan)
       if r.status then
         print(("(daemon: %s) [%ds]"):format(tostring(r.status), now - t0))
         deadline = now + 240
       elseif r.ok then
-        print(("(daemon answered in %ds)"):format(now - t0))
-        return r.output
+        if tostring(r.output or ""):find("PLAN ordered", 1, true) then
+          print(("(daemon answered in %ds)"):format(now - t0))
+          return r.output
+        end -- a stray ack from an old poll/cancel: ignore, keep waiting
       else print("daemon error: " .. tostring(r.output)); return nil end
     end
   end
