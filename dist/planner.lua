@@ -220,12 +220,22 @@ local function render_monitor(mon)
     text(ox2 + 1, 1, "shortest: " .. (#B.path - 1), C.lime)
     base(ox1, A); base(ox2, B)
     for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.lightGray) end
+    -- paint a path cell, keeping the S/G labels visible when passing over them
+    local function mark(ox, p, x, y, bg)
+      local label, fg
+      if x == p.start.x and y == p.start.y then label, fg = "S", C.black
+      elseif p.gset[x .. "," .. y] then label, fg = "G", C.black end
+      fill(ox, x, y, bg, label, fg)
+    end
     for i = 1, math.max(#A.path, #B.path) do
       for _, pr in ipairs({ { ox1, A, C.yellow }, { ox2, B, C.cyan } }) do
         local ox, p, tc = pr[1], pr[2], pr[3]
         if i <= #p.path then
-          if i > 1 then local v = p.path[i - 1]; fill(ox, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc) end
-          fill(ox, p.path[i].x, p.path[i].y, C.white)
+          if i > 1 then
+            local v = p.path[i - 1]
+            mark(ox, p, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc)
+          end
+          mark(ox, p, p.path[i].x, p.path[i].y, C.white)
         end
       end
       if sleep then sleep(0.18) end
