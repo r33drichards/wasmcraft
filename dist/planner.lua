@@ -67,57 +67,57 @@ print("booting Picat + solving both plans (~30-60s, one boot)...")
 local A, B = parse_both(picat.run(PROGRAM, { root = "." }))
 print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.path - 1))
 
--- cells each route visits that the OTHER does not -> these get bordered
-local visA, visB = {}, {}
-for _, q in ipairs(A.path) do visA[q.x .. "," .. q.y] = true end
-for _, q in ipairs(B.path) do visB[q.x .. "," .. q.y] = true end
-local function onlyA(x, y) return visA[x .. "," .. y] and not visB[x .. "," .. y] end
-local function onlyB(x, y) return visB[x .. "," .. y] and not visA[x .. "," .. y] end
+-- a short problem/solution blurb shown under the grids (<=3 sentences)
+local BLURB = string.format(
+  "Goal: from S, visit every goal G in the fewest steps. Left visits the goals " ..
+  "in the order given (%d moves); right lets Picat's planner pick the order (%d). " ..
+  "Same goals, but choosing the order finds the shorter route.", #A.path - 1, #B.path - 1)
 
--- ---- monitor: two grids side by side, animation loops -----------------------
+local function wrap(text, width)
+  local out, line = {}, ""
+  for word in text:gmatch("%S+") do
+    if #line + #word + 1 > width then out[#out + 1] = line; line = word
+    elseif line == "" then line = word else line = line .. " " .. word end
+  end
+  if line ~= "" then out[#out + 1] = line end
+  return out
+end
+
+-- ---- monitor: two grids side by side, animation loops, blurb beneath --------
 local function render_monitor(mon)
   local C = colors or colours
   mon.setTextScale(1)
   local W, H = mon.getSize()
   local gw, gh = A.bounds.x + 1, A.bounds.y + 1
+  local blurb = wrap(BLURB, W)
+  local gridrows = H - 1 - #blurb - 1            -- title row + blurb (+gap) reserved
   local cw = math.max(1, math.floor((W - 3) / (2 * gw)))
-  local ch = math.max(1, math.floor((H - 2) / gh))
+  local ch = math.max(1, math.floor(gridrows / gh))
   local ox1, ox2, oy = 0, cw * gw + 3, 2
-  local function fill(ox, gx, gy, bg, label, fg, border)
+  local function fill(ox, gx, gy, bg, label, fg)
     local sx, sy = ox + gx * cw, oy + (A.bounds.y - gy) * ch
     mon.setBackgroundColor(bg)
     for r = 0, ch - 1 do mon.setCursorPos(sx + 1, sy + 1 + r); mon.write(string.rep(" ", cw)) end
-    if border and cw >= 2 and ch >= 2 then -- frame divergent cells
-      mon.setBackgroundColor(border)
-      mon.setCursorPos(sx + 1, sy + 1); mon.write(string.rep(" ", cw))
-      mon.setCursorPos(sx + 1, sy + ch); mon.write(string.rep(" ", cw))
-      for r = 0, ch - 1 do mon.setCursorPos(sx + 1, sy + 1 + r); mon.write(" "); mon.setCursorPos(sx + cw, sy + 1 + r); mon.write(" ") end
-    end
     if label then mon.setTextColor(fg or C.white); mon.setCursorPos(sx + math.floor(cw / 2) + 1, sy + math.floor(ch / 2) + 1); mon.write(label) end
   end
-  local function base(ox, p, diff)
-    for gy = 0, p.bounds.y do for gx = 0, p.bounds.x do fill(ox, gx, gy, C.gray, nil, nil, diff(gx, gy) and C.magenta or nil) end end
+  local function base(ox, p)
+    for gy = 0, p.bounds.y do for gx = 0, p.bounds.x do fill(ox, gx, gy, C.gray) end end
     for _, g in ipairs(p.goals) do fill(ox, g.x, g.y, C.orange, "G", C.black) end
     fill(ox, p.start.x, p.start.y, C.lime, "S", C.black)
   end
-  local function title(ox, text, col)
-    mon.setBackgroundColor(C.black); mon.setTextColor(col); mon.setCursorPos(ox + 1, 1); mon.write(text)
-  end
+  local function text(x, y, s, col) mon.setBackgroundColor(C.black); mon.setTextColor(col); mon.setCursorPos(x, y); mon.write(s) end
   while true do
     mon.setBackgroundColor(C.black); mon.clear()
-    title(ox1, "in order: " .. (#A.path - 1), C.yellow)
-    title(ox2, "shortest: " .. (#B.path - 1), C.lime)
-    base(ox1, A, onlyA); base(ox2, B, onlyB)
+    text(ox1 + 1, 1, "in order: " .. (#A.path - 1), C.yellow)
+    text(ox2 + 1, 1, "shortest: " .. (#B.path - 1), C.lime)
+    base(ox1, A); base(ox2, B)
+    for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.lightGray) end
     for i = 1, math.max(#A.path, #B.path) do
-      for _, pr in ipairs({ { ox1, A, C.yellow, onlyA }, { ox2, B, C.cyan, onlyB } }) do
-        local ox, p, tc, diff = pr[1], pr[2], pr[3], pr[4]
+      for _, pr in ipairs({ { ox1, A, C.yellow }, { ox2, B, C.cyan } }) do
+        local ox, p, tc = pr[1], pr[2], pr[3]
         if i <= #p.path then
-          if i > 1 then
-            local v = p.path[i - 1]
-            fill(ox, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc, nil, nil, diff(v.x, v.y) and C.magenta or nil)
-          end
-          local h = p.path[i]
-          fill(ox, h.x, h.y, C.white, nil, nil, diff(h.x, h.y) and C.magenta or nil)
+          if i > 1 then local v = p.path[i - 1]; fill(ox, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc) end
+          fill(ox, p.path[i].x, p.path[i].y, C.white)
         end
       end
       if sleep then sleep(0.18) end
@@ -126,15 +126,14 @@ local function render_monitor(mon)
   end
 end
 
--- magenta-bordered cells above become "#" here (cells unique to this route)
-local function render_ascii(p, label, diff)
-  print(label .. ": " .. (#p.path - 1) .. " moves   (# = only this route visits)")
+local function render_ascii(p, label)
+  print(label .. ": " .. (#p.path - 1) .. " moves")
   local vis = {}; for _, q in ipairs(p.path) do vis[q.x .. "," .. q.y] = true end
   print("+" .. string.rep("-", p.bounds.x + 1) .. "+")
   for y = p.bounds.y, 0, -1 do
     local row = {}
     for x = 0, p.bounds.x do
-      local c = vis[x .. "," .. y] and (diff(x, y) and "#" or "*") or " "
+      local c = vis[x .. "," .. y] and "*" or " "
       if p.gset[x .. "," .. y] then c = "G" end
       if x == p.start.x and y == p.start.y then c = "O" end
       row[#row + 1] = c
@@ -146,9 +145,10 @@ end
 
 local mon = (type(peripheral) == "table") and peripheral.find and peripheral.find("monitor")
 if mon then
-  print("monitor found — animating (hold Ctrl+T to stop). magenta border = cells unique to that route.")
+  print("monitor found — animating (hold Ctrl+T to stop).")
   render_monitor(mon)
 else
   print("NO MONITOR — drawing to terminal (computer must touch the monitor to use it).")
-  render_ascii(A, "in order", onlyA); render_ascii(B, "shortest", onlyB)
+  render_ascii(A, "in order"); render_ascii(B, "shortest")
+  print(BLURB)
 end

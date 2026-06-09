@@ -110,7 +110,7 @@ function M.make(opts)
 
   -- file descriptor table (0/1/2 std; 3 = preopened ".")
   local fds = {
-    [0] = { kind = "stdin" }, [1] = { kind = "stdout" }, [2] = { kind = "stderr" },
+    [0] = { kind = "stdin", reader = opts.stdin }, [1] = { kind = "stdout" }, [2] = { kind = "stderr" },
   }
   if hostfs then fds[3] = { kind = "dir", name = "/" } end
   local next_fd = 4
@@ -152,6 +152,16 @@ function M.make(opts)
         local ptr = ru32(mem, base); local len = ru32(mem, base + 4)
         local chunk = e.img:read(e.pos, len)
         mem:storestr(ptr, chunk); e.pos = e.pos + #chunk; total = total + #chunk
+        if #chunk < len then break end
+      end
+    elseif e and e.kind == "stdin" and e.reader then
+      -- stdin from a host reader: reader(maxlen) -> string ("" = EOF). May yield
+      -- (when driven inside a coroutine) to wait for the next line of input.
+      for k = 0, iovs_len - 1 do
+        local base = iovs + k * 8
+        local ptr = ru32(mem, base); local len = ru32(mem, base + 4)
+        local chunk = e.reader(len) or ""
+        mem:storestr(ptr, chunk); total = total + #chunk
         if #chunk < len then break end
       end
     end
@@ -196,8 +206,12 @@ function M.make(opts)
       if e.kind == "file" then ft = FT.file elseif e.kind == "dir" then ft = FT.dir end
     end
     mem:set8(buf, ft)
-    -- grant all rights so libc permits every op
-    mem:storestr(buf + 8, spack("<I4", 0xFFFFFFFF) .. spack("<I4", 0xFFFFFFFF))
+    -- grant all rights so libc permits every op, EXCEPT: for a character device
+    -- (the std streams) clear FD_SEEK(0x4)+FD_TELL(0x20) so wasi-libc's isatty()
+    -- returns true -> programs (Picat's REPL) treat the stream as a terminal.
+    local base = 0xFFFFFFFF
+    if ft == FT.chardev then base = 0xFFFFFFDB end
+    mem:storestr(buf + 8, spack("<I4", base) .. spack("<I4", 0xFFFFFFFF))
     mem:storestr(buf + 16, spack("<I4", 0xFFFFFFFF) .. spack("<I4", 0xFFFFFFFF))
     return { 0 }
   end

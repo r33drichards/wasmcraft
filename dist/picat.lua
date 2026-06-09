@@ -82,4 +82,73 @@ function M.runfile(path, opts)
   return table.concat(out)
 end
 
+-- ---- live session: boot Picat ONCE, run many programs --------------------
+-- Drives Picat's interactive REPL over a coroutine-fed stdin (our WASI reports
+-- stdin as a tty so the REPL engages). Each :run compiles+runs a program in the
+-- already-booted engine, so only the FIRST call pays the ~30s boot.
+function M.session(opts)
+  opts = opts or {}
+  local module = load_module(opts)
+  local root = opts.root or "."
+  local hostfs = wasmcraft.hostfs(root) or wasmcraft.wasi.io_hostfs(root)
+  local START, ENDT = "<WCSTART>", "<WCEND>"
+  local S = { root = root }
+
+  local function boot()
+    local out, inbuf, inpos = {}, "", 1
+    local function reader(maxlen)
+      while inpos > #inbuf do coroutine.yield() end      -- park until fed
+      local c = inbuf:sub(inpos, inpos + maxlen - 1); inpos = inpos + #c; return c
+    end
+    local host = wasmcraft.wasi.make({
+      fs = hostfs, root = root, args = { "picat" }, stdin = reader,
+      write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
+    })
+    local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit", chunk_cache = M._cache })
+    -- NB: no pcall here — Lua 5.1 forbids yielding across a pcall, and the stdin
+    -- reader yields. proc_exit (on halt) surfaces as a resume error we handle below.
+    local co = coroutine.create(function() inst:call("_start") end)
+    S._feed = function(line)
+      inbuf, inpos = line, 1
+      for i = #out, 1, -1 do out[i] = nil end
+      local ok, err = coroutine.resume(co)
+      if coroutine.status(co) == "dead" then
+        S._dead = true
+        if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then
+          error("picat session error: " .. tostring(err))
+        end
+      elseif not ok then
+        error("picat session error: " .. tostring(err))
+      end
+      return table.concat(out)
+    end
+    S._dead = false
+    local ok, err = coroutine.resume(co) -- boot to the first prompt (banner discarded)
+    if not ok then error("picat boot failed: " .. tostring(err)) end
+  end
+  boot()
+
+  -- run a Picat program string; returns ONLY its own stdout (REPL noise stripped).
+  -- The interactive REPL echoes the command line, so the markers are built with
+  -- Picat string-concat (++) — the literal <WCSTART>/<WCEND> then appears only in
+  -- the program's actual output, never in the echoed command.
+  function S:run(program, name)
+    if S._dead then boot() end
+    name = name or "_sess.pi"; hostfs.write(name, program)
+    local raw = S._feed('cl("' .. name .. '"), print("<WCST"++"ART>"), ' ..
+      'catch((main->true;true),E,printf("ERR %w",E)), print("<WCE"++"ND>").\n')
+    local a = raw:find(START, 1, true)
+    local b = raw:find(ENDT, 1, true)
+    if a and b then return (raw:sub(a + #START, b - 1):gsub("^\n", "")) end
+    return raw -- compile error etc. — hand back the raw REPL output
+  end
+
+  -- run a raw Picat goal/query (e.g. "X=2+3, println(X).")
+  function S:query(goal) if S._dead then boot() end return S._feed(goal .. "\n") end
+  -- discard this engine and boot a fresh one (clears all loaded/asserted state)
+  function S:reset() pcall(function() S._feed("halt.\n") end); boot() end
+  function S:close() pcall(function() S._feed("halt.\n") end); S._dead = true end
+  return S
+end
+
 return M
