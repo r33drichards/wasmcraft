@@ -233,10 +233,16 @@ end
 -- ---- monitor: two grids side by side, animation loops, blurb beneath --------
 local function render_monitor(mon)
   local C = colors or colours
-  mon.setTextScale(1)
-  local W, H = mon.getSize()
   local gw, gh = A.bounds.x + 1, A.bounds.y + 1
-  local blurb = wrap(BLURB, W)
+  -- one text scale serves the whole monitor, and it sizes the blurb text: use
+  -- the LARGEST scale that still fits both grids (>=2 chars/cell) + the blurb
+  local W, H, blurb
+  for _, s in ipairs({ 3, 2.5, 2, 1.5, 1, 0.5 }) do
+    mon.setTextScale(s)
+    W, H = mon.getSize()
+    blurb = wrap(BLURB, W)
+    if W - 3 >= 2 * gw * 2 and H - 2 - #blurb >= gh * 2 then break end
+  end
   local gridrows = H - 1 - #blurb - 1            -- title row + blurb (+gap) reserved
   local cw = math.max(1, math.floor((W - 3) / (2 * gw)))
   local ch = math.max(1, math.floor(gridrows / gh))
@@ -258,7 +264,7 @@ local function render_monitor(mon)
     text(ox1 + 1, 1, "in order: " .. (#A.path - 1), C.yellow)
     text(ox2 + 1, 1, "shortest: " .. (#B.path - 1), C.lime)
     base(ox1, A); base(ox2, B)
-    for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.lightGray) end
+    for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.white) end
     -- paint a path cell, keeping the S/G labels visible when passing over them
     local function mark(ox, p, x, y, bg)
       local label, fg
