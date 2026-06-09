@@ -55,7 +55,7 @@ action(F,T,A,C) ?=> F={Pos,[Pos|Rest],ordered}, T={Pos,Rest,ordered}, A={mark,Po
 action(F,T,A,C) ?=> F={Pos,Gs,free}, member(Pos,Gs), T={Pos,delete(Gs,Pos),free}, A={mark,Pos}, C=1.
 walk(_,[]) => true.
 walk(_,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n",Tx,Ty), walk({Tx,Ty},R).
-walk(P,[{mark,_}|R]) => walk(P,R).
+walk(P,[{mark,{Mx,My}}|R]) => printf("MARK %w %w\n",Mx,My), walk(P,R).
 ]]
 
 -- ---- solve via a picatd daemon on the network (preferred: warm, no floppy) --
@@ -168,23 +168,36 @@ local function local_solve()
   return picat.run(PROGRAM, { root = "." })
 end
 
--- one combined run -> shared grid + two paths (ordered, free)
+-- one combined run -> shared grid + two plans (ordered, free). Each plan keeps
+-- its movement path AND its mark events (when a goal is actually claimed) —
+-- a route may PASS OVER a goal it isn't allowed to claim yet (in-order mode).
 local function parse_both(out)
   local bounds, start, goals, gset = { x = 4, y = 4 }, { x = 0, y = 0 }, {}, {}
-  local pathO, pathF, cur = {}, {}, nil
+  local O, F = { path = {}, events = {} }, { path = {}, events = {} }
+  local cur
   for line in out:gmatch("[^\n]+") do
-    if line == "PLAN ordered" then cur = pathO
-    elseif line == "PLAN free" then cur = pathF
+    if line == "PLAN ordered" then cur = O
+    elseif line == "PLAN free" then cur = F
     else
       local k, a, b = line:match("(%u+)%s+(%-?%d+)%s+(%-?%d+)")
       if k == "BOUNDS" then bounds = { x = tonumber(a), y = tonumber(b) }
       elseif k == "START" then start = { x = tonumber(a), y = tonumber(b) }
       elseif k == "GOAL" then goals[#goals + 1] = { x = tonumber(a), y = tonumber(b) }; gset[a .. "," .. b] = true
-      elseif k == "PATH" and cur then cur[#cur + 1] = { x = tonumber(a), y = tonumber(b) } end
+      elseif k == "PATH" and cur then
+        local p = { x = tonumber(a), y = tonumber(b) }
+        cur.path[#cur.path + 1] = p
+        cur.events[#cur.events + 1] = { t = "move", x = p.x, y = p.y }
+      elseif k == "MARK" and cur then
+        cur.has_marks = true
+        cur.events[#cur.events + 1] = { t = "mark", x = tonumber(a), y = tonumber(b) }
+      end
     end
   end
-  local function plan(path) return { bounds = bounds, start = start, goals = goals, gset = gset, path = path } end
-  return plan(pathO), plan(pathF)
+  local function plan(p)
+    return { bounds = bounds, start = start, goals = goals, gset = gset,
+      path = p.path, events = p.events, has_marks = p.has_marks }
+  end
+  return plan(O), plan(F)
 end
 
 -- ---- durable solve: cache results, restart interrupted solves ---------------
@@ -265,26 +278,47 @@ local function render_monitor(mon)
     text(ox2 + 1, 1, "shortest: " .. (#B.path - 1), C.lime)
     base(ox1, A); base(ox2, B)
     for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.white) end
-    -- paint a path cell, keeping the S/G labels visible when passing over them
-    local function mark(ox, p, x, y, bg)
-      local label, fg
-      if x == p.start.x and y == p.start.y then label, fg = "S", C.black
-      elseif p.gset[x .. "," .. y] then label, fg = "G", C.black end
+    -- Animate over events. A goal only turns RED when the plan actually MARKS
+    -- it — a route may pass over a goal it can't claim yet (in-order mode), and
+    -- that goal stays orange until its turn. (Old cached results have no mark
+    -- events; for those, crossing a goal claims it, as before.)
+    local claimed = { [1] = {}, [2] = {} }
+    local function paint(ox, p, cl, x, y, trailcolor)
+      local key = x .. "," .. y
+      local bg, label, fg = trailcolor, nil, nil
+      if x == p.start.x and y == p.start.y then label, fg = "S", C.black end
+      if p.gset[key] then
+        label, fg = "G", C.black
+        if not p.has_marks then cl[key] = true end
+        bg = cl[key] and C.red or C.orange
+      end
       fill(ox, x, y, bg, label, fg)
     end
-    for i = 1, math.max(#A.path, #B.path) do
-      for _, pr in ipairs({ { ox1, A, C.yellow }, { ox2, B, C.cyan } }) do
+    local heads = { nil, nil }
+    for i = 1, math.max(#A.events, #B.events) do
+      for side, pr in ipairs({ { ox1, A, C.yellow }, { ox2, B, C.cyan } }) do
         local ox, p, tc = pr[1], pr[2], pr[3]
-        if i <= #p.path then
-          if i > 1 then
-            local v = p.path[i - 1]
-            mark(ox, p, v.x, v.y, p.gset[v.x .. "," .. v.y] and C.red or tc)
+        local ev = p.events[i]
+        if ev then
+          if ev.t == "mark" then
+            claimed[side][ev.x .. "," .. ev.y] = true
+            paint(ox, p, claimed[side], ev.x, ev.y, tc)
+          else
+            local prev = heads[side]
+            if prev then paint(ox, p, claimed[side], prev.x, prev.y, tc) end
+            heads[side] = ev
+            -- the moving head: always white, keeping the G/S label if on one
+            local key = ev.x .. "," .. ev.y
+            if p.gset[key] then fill(ox, ev.x, ev.y, C.white, "G", C.black)
+            elseif ev.x == p.start.x and ev.y == p.start.y then fill(ox, ev.x, ev.y, C.white, "S", C.black)
+            else fill(ox, ev.x, ev.y, C.white) end
           end
-          mark(ox, p, p.path[i].x, p.path[i].y, C.white)
         end
       end
       if sleep then sleep(0.18) end
     end
+    heads = { nil, nil }
+    claimed = { [1] = {}, [2] = {} }
     if sleep then sleep(1.2) end
   end
 end
