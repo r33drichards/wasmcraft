@@ -1,69 +1,49 @@
--- Compiler (wasm -> Lua 5.1 bytecode) correctness. COBALT ONLY: the emitted
--- bytecode is Lua 5.1 format, which only Cobalt loads. Results are checked
--- against the same values the interpreter/wasmtime produce.
+-- Differential test: every fixture run through BOTH the interpreter and the
+-- wasm->bytecode compiler must agree. COBALT ONLY (5.1 bytecode).
 package.path = "src/?.lua;test/?.lua;" .. package.path
 local T = require("harness")
+local wasm = require("wasm")
 local decoder = require("decoder")
 local compiler = require("compiler")
-local runtime = require("runtime")
-local to_u32, to_s32 = runtime.to_u32, runtime.to_s32
-local loader = loadstring or load
 T.start("compiler")
 
-local cache = {}
-local function load_mod(name)
-  if cache[name] then return cache[name] end
-  local f = assert(io.open("wasm/" .. name .. ".wasm", "rb")); local b = f:read("*a"); f:close()
-  cache[name] = decoder.load(b); return cache[name]
+local function readwasm(name)
+  local f = assert(io.open("wasm/" .. name .. ".wasm", "rb")); local b = f:read("*a"); f:close(); return b
 end
 
--- compile the exported function `fname` of module `name`, return a callable
-local function compile(name, fname)
-  local mod = load_mod(name)
-  local exp = mod.exports[fname]
-  local fidx = exp.index - mod.numImportedFuncs + 1
-  T.ok(compiler.can_compile(mod, fidx), name .. "." .. fname .. " can_compile")
-  local chunk = compiler.compile_func(mod, fidx)
-  local factory = assert(loader(chunk, name .. "." .. fname))
-  return factory(runtime.make())
+local function approx(a, b)
+  if type(a) == "number" and type(b) == "number" then
+    if a ~= a and b ~= b then return true end -- NaN
+    return math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a))
+  end
+  return a == b
 end
 
-local function i(fn, ...) -- call with i32 args, signed result
-  local a = { ... }; for k = 1, #a do a[k] = to_u32(a[k]) end
-  return to_s32(fn((table.unpack or unpack)(a)))
+local function diff(name, calls)
+  local b = readwasm(name)
+  local ii = wasm.instantiate(wasm.load(b), {})
+  local ok, ci = pcall(compiler.instantiate, decoder.load(b), {})
+  if not ok then T.ok(false, name .. " compiles: " .. tostring(ci)); return end
+  for _, c in ipairs(calls) do
+    local label = name .. ":" .. table.concat(c, ",")
+    local r1 = { ii:call((table.unpack or unpack)(c)) }
+    local r2 = { ci:call((table.unpack or unpack)(c)) }
+    local same = #r1 == #r2
+    for k = 1, #r1 do if not approx(r1[k], r2[k]) then same = false end end
+    T.ok(same, label .. "  interp=" .. tostring(r1[1]) .. " compiled=" .. tostring(r2[1]))
+  end
 end
 
--- add.wasm
-local add = compile("add", "add")
-T.eq(i(add, 7, 35), 42, "add(7,35)")
-T.eq(i(add, -1, 1), 0, "add(-1,1) wraps")
-T.eq(i(add, 2147483647, 1), -2147483648, "add overflow wraps")
-
--- fib (block/loop/br_if/br)
-local fib = compile("fib", "fib")
-T.eq(i(fib, 10), 55, "fib(10)")
-T.eq(i(fib, 20), 6765, "fib(20)")
-T.eq(i(fib, 0), 0, "fib(0)")
-
--- br_table
-local sw = compile("brtable", "sw")
-T.eq(i(sw, 0), 10, "sw(0)")
-T.eq(i(sw, 1), 20, "sw(1)")
-T.eq(i(sw, 2), 30, "sw(2)")
-T.eq(i(sw, 3), 99, "sw(3) default")
-T.eq(i(sw, 7), 99, "sw(7) default")
-
--- i32 op coverage
-local f = compile("i32ops", "f")
-T.eq(i(f, 5, 300), 1171, "i32ops f(5,300)")
-local divrem = compile("i32ops", "divrem")
-T.eq(i(divrem, 17, 5), 5, "divrem(17,5)")
-T.eq(i(divrem, -17, 5), -5, "divrem(-17,5)")
-local cmp = compile("i32ops", "cmp")
-T.eq(i(cmp, 3, 5), 1, "cmp(3,5)")
-T.eq(i(cmp, 0, 5), 101, "cmp(0,5)")
-local bits = compile("i32ops", "bits")
-T.eq(i(bits, 16), 32, "bits(16)")
-T.eq(i(bits, 255), 32, "bits(255)")
+diff("add", { { "add", 7, 35 }, { "add", -1, 1 }, { "add", 2147483647, 1 }, { "add", 100, -50 } })
+diff("fib", { { "fib", 10 }, { "fib", 20 }, { "fib", 0 }, { "fib", 1 } })
+diff("brtable", { { "sw", 0 }, { "sw", 1 }, { "sw", 2 }, { "sw", 3 }, { "sw", 7 } })
+diff("call", { { "sumsq", 3, 4 } })
+diff("indirect", { { "op", 0, 8, 5 }, { "op", 1, 8, 5 } })
+diff("mem", { { "sum", 5 }, { "sum", 10 }, { "bytes" } })
+diff("i32ops", { { "f", 5, 300 }, { "divrem", 17, 5 }, { "divrem", -17, 5 }, { "cmp", 3, 5 }, { "cmp", 0, 5 }, { "bits", 16 }, { "bits", 255 } })
+diff("i64ops", { { "mul_lo" }, { "mul_hi" }, { "div" }, { "rem" }, { "shift" }, { "clz" }, { "eqz0" }, { "lts" }, { "ext", -1 }, { "ext", 5 } })
+diff("floatops", { { "add", 0.5, 0.25 }, { "div", 1, 3 }, { "sqrt", 2 }, { "trunc", 3.7 }, { "nearest", 2.5 },
+  { "floor", -1.5 }, { "min", 1, 2 }, { "copysign", 3, -1 }, { "i2f", -5 }, { "u2f", -1 }, { "f2i", 3.9 },
+  { "f2u", 4000000000.5 }, { "demote", 3.14159265358979 }, { "reinterp", 0.1 } })
 
 T.done()
