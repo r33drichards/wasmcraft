@@ -81,15 +81,20 @@ local function daemon_solve()
     ":" .. tostring(os.epoch and os.epoch("utc") or os.clock())
   print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
   rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
+  -- LIVENESS-BASED deadline: a long solve is fine as long as status polls show
+  -- the daemon working. We only give up when the daemon stops answering, or it
+  -- goes idle without our reply twice (job lost, e.g. daemon rebooted) — in
+  -- which case the job is re-sent once. Hard cap 30 min.
   local t0 = os.clock()
-  local deadline, lastbeat, lastpoll, statid = t0 + 600, t0, t0, nil
-  while os.clock() < deadline do
-    -- short receive slices so we can heartbeat while waiting
+  local lastbeat, lastpoll, statid = t0, t0, nil
+  local deadline, hard = t0 + 240, t0 + 1800
+  local last_status_reply = t0
+  local idle_polls, resent = 0, false
+  while os.clock() < deadline and os.clock() < hard do
     local _, r = rednet.receive(PROTO, 5)
+    local now = os.clock()
     if r == nil then
-      local now = os.clock()
       if now - lastpoll >= 30 then
-        -- ask the daemon what it's doing so a long solve is visibly alive
         lastpoll = now
         statid = mid .. ":st" .. math.floor(now)
         rednet.send(id, { action = "status", id = statid }, PROTO)
@@ -97,18 +102,43 @@ local function daemon_solve()
         lastbeat = now
         print(("(still waiting on daemon... %ds elapsed)"):format(now - t0))
       end
+      if now - last_status_reply > 90 and now - t0 > 90 then
+        print("(daemon stopped answering status polls - it is gone)")
+        break
+      end
     elseif type(r) == "table" and r.id == statid then
-      local line = tostring(r.output or ""):match("planner:[^\n]*")
-      print(("(daemon alive: %s) [%ds]"):format(line or "status ok", os.clock() - t0))
+      last_status_reply = now
+      local line = tostring(r.output or ""):match("planner:[^\n]*") or "status ok"
+      print(("(daemon alive: %s) [%ds]"):format(line, now - t0))
+      local queued = tonumber(line:match("(%d+) queued")) or 0
+      if line:find("busy") or line:find("booting") or queued > 0 then
+        idle_polls = 0
+        deadline = now + 240 -- actively working: keep waiting
+      else
+        idle_polls = idle_polls + 1
+        if idle_polls >= 2 then
+          if not resent then
+            resent, idle_polls = true, 0
+            print("(daemon idle but our reply never came - job lost; re-sending it)")
+            rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
+            deadline = now + 240
+          else
+            print("(job lost twice - giving up on the daemon)")
+            break
+          end
+        end
+      end
     elseif type(r) == "table" and (r.id == mid or r.id == nil) then
-      if r.status then print(("(daemon: %s) [%ds]"):format(tostring(r.status), os.clock() - t0))
+      if r.status then
+        print(("(daemon: %s) [%ds]"):format(tostring(r.status), now - t0))
+        deadline = now + 240
       elseif r.ok then
-        print(("(daemon answered in %ds)"):format(os.clock() - t0))
+        print(("(daemon answered in %ds)"):format(now - t0))
         return r.output
       else print("daemon error: " .. tostring(r.output)); return nil end
     end
   end
-  print("(daemon timed out after 600s - trying a local boot instead)")
+  print("(giving up on the daemon - trying a local boot instead)")
   return nil
 end
 

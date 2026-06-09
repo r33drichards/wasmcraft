@@ -2282,10 +2282,20 @@ function M.make(inst)
   if type(os) == "table" and os.queueEvent and os.pullEvent then
     E.__yield = function() os.queueEvent("wasmcraft"); os.pullEvent("wasmcraft") end
   end
-  local ticks = 0
+  -- Time-gated: yield at most ~once/second. Counting alone (yield every 100k
+  -- ticks unconditionally) caused thousands of yields per long run, and on a
+  -- busy server each yield costs real scheduling latency — observed 30x
+  -- slowdowns. One yield/second satisfies the watchdog with minimal overhead.
+  local ticks, lastyield = 0, os.clock()
   E.__tick = function()
     ticks = ticks + 1
-    if ticks >= 100000 then ticks = 0; if E.__yield then E.__yield() end end
+    if ticks >= 100000 then
+      ticks = 0
+      if E.__yield and os.clock() - lastyield >= 1 then
+        lastyield = os.clock()
+        E.__yield()
+      end
+    end
   end
   return E
 end
@@ -2999,6 +3009,7 @@ local wasi = require("wasi")
 
 -- public surface
 wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield }
+wasmcraft.version = 2 -- bump to make cached copies on in-game computers self-refresh
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a

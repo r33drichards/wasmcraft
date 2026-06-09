@@ -28,10 +28,14 @@ ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
 local function load_lib()
   return assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
 end
+local ENGINE_VERSION = 2
 local picat = load_lib()
 -- self-heal: ensure() keeps pre-existing files, so an old picat.lua/wasmcraft
--- (without session support) may have been loaded. Refresh both and reload.
-if not picat.session and type(fs) == "table" then
+-- (without session support, or an outdated engine) may load. Refresh + reload.
+local function stale(p)
+  return not p.session or ((p._engine and p._engine.version or 0) < ENGINE_VERSION)
+end
+if stale(picat) and type(fs) == "table" then
   print("picatd: picat.lua/wasmcraft out of date - refreshing...")
   for f, u in pairs({ ["picat.lua"] = PICATLIB_URL, ["wasmcraft"] = BUNDLE_URL }) do
     if fs.exists(f) then fs.delete(f) end

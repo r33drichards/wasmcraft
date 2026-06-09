@@ -46,9 +46,11 @@ local function ask(m, timeout)
     tostring(os.epoch and os.epoch("utc") or os.clock())
   rednet.send(id, m, PROTO)
   local t0 = os.clock()
-  local deadline, lastpoll, statid = t0 + (timeout or 300), t0, nil
-  local poll = m.action == "run" or m.action == "query" -- liveness for slow jobs
-  while os.clock() < deadline do
+  -- liveness-based deadline: keep waiting while status polls show the session
+  -- working on something (long solves are normal); hard cap 30 min
+  local deadline, hard, lastpoll, statid = t0 + (timeout or 240), t0 + 1800, t0, nil
+  local poll = m.action == "run" or m.action == "query"
+  while os.clock() < deadline and os.clock() < hard do
     local _, r = rednet.receive(PROTO, 5)
     if r == nil and poll and os.clock() - lastpoll >= 30 then
       lastpoll = os.clock()
@@ -56,11 +58,16 @@ local function ask(m, timeout)
       rednet.send(id, { action = "status", id = statid }, PROTO)
     elseif type(r) == "table" and r.id == statid then
       local want = (session or "main") .. ":"
-      local line = tostring(r.output or ""):match(want:gsub("%-", "%%-") .. "[^\n]*")
-      print(("(daemon alive: %s) [%ds]"):format(line or "status ok", os.clock() - t0))
+      local line = tostring(r.output or ""):match(want:gsub("%-", "%%-") .. "[^\n]*") or "status ok"
+      print(("(daemon alive: %s) [%ds]"):format(line, os.clock() - t0))
+      local queued = tonumber(line:match("(%d+) queued")) or 0
+      if line:find("busy") or line:find("booting") or queued > 0 then
+        deadline = os.clock() + 240 -- session actively working: keep waiting
+      end
     elseif type(r) == "table" and (r.id == m.id or r.id == nil) then
       if r.status then
         print("(" .. tostring(r.status) .. ")")
+        deadline = os.clock() + 240
       else
         return r
       end
