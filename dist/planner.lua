@@ -2,9 +2,14 @@
 -- LEFT: visit goals IN ORDER.  RIGHT: visit them in ANY order (shortest).
 -- Same goals; the planner picks the cheaper order on the right, so it's shorter.
 -- (after Hillel Wayne's "Planner programming blows my mind")
---   Usage: planner   (auto-finds picat.wasm on a floppy at /disk/)
+--   Usage: planner [daemon]
+-- Solves via a picatd daemon on the network when one is reachable (fast, warm,
+-- and this computer needs NO picat.wasm) — else boots Picat locally (needs
+-- picat.wasm, e.g. on a floppy at /disk/).
 local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
 local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
+local PROTO = "wcpicat"
+local args = { ... }
 
 -- ONE Picat program solves BOTH plans (mode carried in the planner state), so
 -- Picat boots only once. Goals chosen so the in-order route is much longer.
@@ -30,7 +35,34 @@ walk(_,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n",Tx,Ty), walk({Tx,Ty},R).
 walk(P,[{mark,_}|R]) => walk(P,R).
 ]]
 
--- ---- bootstrap -------------------------------------------------------------
+-- ---- solve via a picatd daemon on the network (preferred: warm, no floppy) --
+local function daemon_solve()
+  if type(peripheral) ~= "table" or not peripheral.find or not rednet then return nil end
+  local opened = false
+  peripheral.find("modem", function(n) rednet.open(n); opened = true end)
+  if not opened then return nil end
+  local id
+  if args[1] then id = rednet.lookup(PROTO, args[1])
+  else local hosts = { rednet.lookup(PROTO) }; id = hosts[1] end
+  if not id then return nil end
+  print("solving on picatd #" .. id .. " (session 'planner')...")
+  local mid = "planner:" .. tostring(os.getComputerID and os.getComputerID() or 0) ..
+    ":" .. tostring(os.epoch and os.epoch("utc") or os.clock())
+  rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
+  local deadline = os.clock() + 300
+  while os.clock() < deadline do
+    local _, r = rednet.receive(PROTO, deadline - os.clock())
+    if type(r) == "table" and (r.id == mid or r.id == nil) then
+      if r.status then print("(" .. tostring(r.status) .. ")")
+      elseif r.ok then return r.output
+      else print("daemon error: " .. tostring(r.output)); return nil end
+    end
+  end
+  print("(daemon timed out — trying a local boot instead)")
+  return nil
+end
+
+-- ---- fallback: boot Picat on THIS computer (needs picat.wasm) ---------------
 local function ensure(file, url)
   if type(fs) == "table" and fs.open and not fs.exists(file) then
     io.write("fetching " .. file .. " ... ")
@@ -39,10 +71,22 @@ local function ensure(file, url)
   end
 end
 local function find(c) for _, p in ipairs(c) do local f = io.open(p, "rb"); if f then f:close(); return p end end end
-ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
-local picat = assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
-picat.modulePath = (({ ... })[1]) or find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
-  "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" }) or "disk/picat.wasm"
+local function local_solve()
+  ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
+  local picat = assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
+  local wasmpath = find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
+    "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" })
+  if not wasmpath then
+    print("No picatd daemon on the network AND no local picat.wasm.")
+    print("Either start a daemon somewhere ('picatd --install' on a computer with")
+    print("the engine), or put picat.wasm (https://tinyurl.com/2cladfgs) on a")
+    print("floppy here (/disk/picat.wasm).")
+    error("no way to run Picat", 0)
+  end
+  picat.modulePath = wasmpath
+  print("booting Picat locally + solving both plans (~30-60s)...")
+  return picat.run(PROGRAM, { root = "." })
+end
 
 -- one combined run -> shared grid + two paths (ordered, free)
 local function parse_both(out)
@@ -63,8 +107,11 @@ local function parse_both(out)
   return plan(pathO), plan(pathF)
 end
 
-print("booting Picat + solving both plans (~30-60s, one boot)...")
-local A, B = parse_both(picat.run(PROGRAM, { root = "." }))
+local out = daemon_solve() or local_solve()
+local A, B = parse_both(out)
+if #A.path == 0 or #B.path == 0 then
+  print("could not parse plans; raw output:"); print(out); return
+end
 print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.path - 1))
 
 -- a short problem/solution blurb shown under the grids (<=3 sentences)
