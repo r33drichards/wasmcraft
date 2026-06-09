@@ -4,3 +4,4 @@ vendor/*.jar
 /tmp-*
 result
 result-*
+/.zig-cache/

@@ -43,4 +43,21 @@ function Memory:storestr(a, s)
   for i = 1, #s do b[a + i - 1] = sbyte(s, i) end
 end
 
+-- bulk memory: fill `n` bytes at `d` with byte `val`
+function Memory:fill(d, val, n)
+  local b = self.b
+  val = val % 256
+  for i = 0, n - 1 do b[d + i] = val end
+end
+
+-- bulk memory: copy `n` bytes from `s` to `d` (memmove semantics, overlap-safe)
+function Memory:copy(d, s, n)
+  local b = self.b
+  if d <= s then
+    for i = 0, n - 1 do b[d + i] = b[s + i] or 0 end
+  else
+    for i = n - 1, 0, -1 do b[d + i] = b[s + i] or 0 end
+  end
+end
+
 return Memory

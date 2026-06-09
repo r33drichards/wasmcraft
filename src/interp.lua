@@ -236,6 +236,15 @@ run = function(inst, funcIdx, args)
     elseif op == "i32.store16" then local v = pop(); local a = ea(ins); bounds(a, 2); mem:storestr(a, spack("<I2", v % 65536))
     elseif op == "memory.size" then push(mem:size())
     elseif op == "memory.grow" then local d = pop(); push(to_u32(mem:grow(d)))
+    elseif op == "memory.fill" then
+      local n = pop(); local val = pop(); local d = pop()
+      if d + n > mem.pages * 65536 then trap("out of bounds memory access") end
+      mem:fill(d, val, n)
+    elseif op == "memory.copy" then
+      local n = pop(); local s = pop(); local d = pop()
+      local lim = mem.pages * 65536
+      if d + n > lim or s + n > lim then trap("out of bounds memory access") end
+      mem:copy(d, s, n)
 
     -- i32 comparisons
     elseif op == "i32.eqz" then push(pop() == 0 and 1 or 0)
