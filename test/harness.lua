@@ -44,6 +44,16 @@ function T.eqstr(got, want, msg)
   end
 end
 
+function T.approx(got, want, eps, msg)
+  T.total = T.total + 1
+  eps = eps or 1e-9
+  if type(got) ~= "number" or math.abs(got - want) > eps then
+    T.fails = T.fails + 1
+    print(string.format("  FAIL [%s]: %s\n    expected ~%s\n    got      %s",
+      T.name, msg or "", tostring(want), tostring(got)))
+  end
+end
+
 function T.done()
   print(string.format("%d/%d assertions passed", T.total - T.fails, T.total))
   if T.fails > 0 then print("FAILED") else print("ALL_PASS") end

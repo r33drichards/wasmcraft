@@ -1,0 +1,10 @@
+(module
+ (func (export "mul_lo")(result i32)(i32.wrap_i64 (i64.mul (i64.const 0x100000001)(i64.const 0x100000001))))
+ (func (export "mul_hi")(result i32)(i32.wrap_i64 (i64.shr_u (i64.mul (i64.const 0x100000001)(i64.const 0x100000001))(i64.const 32))))
+ (func (export "div")(result i32)(i32.wrap_i64 (i64.div_s (i64.const -1000000000000)(i64.const 7))))
+ (func (export "rem")(result i32)(i32.wrap_i64 (i64.rem_s (i64.const -1000000000000)(i64.const 7))))
+ (func (export "shift")(result i32)(i32.wrap_i64 (i64.shr_u (i64.const 0x8000000000000000)(i64.const 60))))
+ (func (export "clz")(result i32)(i32.wrap_i64 (i64.clz (i64.const 0x0000000100000000))))
+ (func (export "eqz0")(result i32)(i64.eqz (i64.const 0)))
+ (func (export "lts")(result i32)(i64.lt_s (i64.const -5)(i64.const 3)))
+ (func (export "ext")(param i32)(result i32)(i32.wrap_i64 (i64.shr_u (i64.extend_i32_s (local.get 0))(i64.const 32)))))

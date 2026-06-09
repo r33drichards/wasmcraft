@@ -1,13 +1,51 @@
 -- WebAssembly execution engine: instantiation + a structured-control interpreter.
 local bit = require("bit")
 local Memory = require("memory")
+local I = require("int64")
 
 local M = {}
 
 local POW32 = 2 ^ 32
 local POW31 = 2 ^ 31
+local POW63 = 2 ^ 63
+local POW64 = 2 ^ 64
 local sunpack, spack = string.unpack, string.pack
-local floor = math.floor
+local floor, ceil, abs = math.floor, math.ceil, math.abs
+local huge = math.huge
+
+-- ---- float helpers -------------------------------------------------------
+local function f32round(x) return (sunpack("<f", spack("<f", x))) end
+local function isnan(x) return x ~= x end
+local function ftrunc(x)
+  if x ~= x or x == huge or x == -huge then return x end
+  return x >= 0 and floor(x) or ceil(x)
+end
+local function fnearest(x) -- round half to even
+  if x ~= x or x == huge or x == -huge or x == 0 then return x end
+  local f = floor(x)
+  local diff = x - f
+  local r
+  if diff < 0.5 then r = f
+  elseif diff > 0.5 then r = f + 1
+  else r = (f % 2 == 0) and f or (f + 1) end
+  if r == 0 and x < 0 then return -0.0 end
+  return r
+end
+local function fmin(a, b)
+  if a ~= a then return a end; if b ~= b then return b end
+  if a == 0 and b == 0 then return (1 / a == -huge or 1 / b == -huge) and -0.0 or 0.0 end
+  return a < b and a or b
+end
+local function fmax(a, b)
+  if a ~= a then return a end; if b ~= b then return b end
+  if a == 0 and b == 0 then return (1 / a == huge or 1 / b == huge) and 0.0 or -0.0 end
+  return a > b and a or b
+end
+local function copysign(a, b)
+  local s = (b < 0 or (b == 0 and 1 / b == -huge))
+  a = abs(a)
+  return s and -a or a
+end
 
 -- i32 canonical form: unsigned 0..2^32-1 (exact in a double).
 local function to_u32(x)
@@ -26,13 +64,19 @@ local function clz32(x) if x == 0 then return 32 end local n = 0; while x < 0x80
 local function ctz32(x) if x == 0 then return 32 end local n = 0; while x % 2 == 0 do x = x / 2; n = n + 1 end return n end
 local function popcnt32(x) local n = 0; while x > 0 do n = n + (x % 2); x = floor(x / 2) end return n end
 
--- ---- host/internal coercion (i32 only here; wider types in later milestones)
+-- ---- host/internal coercion ----------------------------------------------
 local function host_to_internal(t, v)
   if t == "i32" then return to_u32(v or 0) end
-  return v or 0
+  if t == "i64" then
+    if I.is(v) then return v end
+    return I.from_double_s(v or 0)
+  end
+  if t == "f32" then return f32round(v or 0) end
+  return v or 0 -- f64 native
 end
 local function internal_to_host(t, v)
   if t == "i32" then return to_s32(v) end
+  if t == "i64" then return I.to_double_s(v) end -- may lose precision >2^53
   return v
 end
 
@@ -246,6 +290,152 @@ run = function(inst, funcIdx, args)
     elseif op == "i32.shr_u" then local c = pop() % 32; push(bit.rshift(pop(), c))
     elseif op == "i32.rotl" then local c = pop() % 32; push(bit.lrotate(pop(), c))
     elseif op == "i32.rotr" then local c = pop() % 32; push(bit.rrotate(pop(), c))
+
+    -- ===== i64 =====
+    elseif op == "i64.const" then push(ins.v)
+    elseif op == "i64.eqz" then push(I.eqz(pop()) and 1 or 0)
+    elseif op == "i64.eq" then local b = pop(); local a = pop(); push(I.eq(a, b) and 1 or 0)
+    elseif op == "i64.ne" then local b = pop(); local a = pop(); push(I.eq(a, b) and 0 or 1)
+    elseif op == "i64.lt_s" then local b = pop(); local a = pop(); push(I.lt_s(a, b) and 1 or 0)
+    elseif op == "i64.lt_u" then local b = pop(); local a = pop(); push(I.lt_u(a, b) and 1 or 0)
+    elseif op == "i64.gt_s" then local b = pop(); local a = pop(); push(I.lt_s(b, a) and 1 or 0)
+    elseif op == "i64.gt_u" then local b = pop(); local a = pop(); push(I.lt_u(b, a) and 1 or 0)
+    elseif op == "i64.le_s" then local b = pop(); local a = pop(); push(I.lt_s(b, a) and 0 or 1)
+    elseif op == "i64.le_u" then local b = pop(); local a = pop(); push(I.lt_u(b, a) and 0 or 1)
+    elseif op == "i64.ge_s" then local b = pop(); local a = pop(); push(I.lt_s(a, b) and 0 or 1)
+    elseif op == "i64.ge_u" then local b = pop(); local a = pop(); push(I.lt_u(a, b) and 0 or 1)
+    elseif op == "i64.clz" then push(I.from_u32(I.clz(pop())))
+    elseif op == "i64.ctz" then push(I.from_u32(I.ctz(pop())))
+    elseif op == "i64.popcnt" then push(I.from_u32(I.popcnt(pop())))
+    elseif op == "i64.add" then local b = pop(); local a = pop(); push(I.add(a, b))
+    elseif op == "i64.sub" then local b = pop(); local a = pop(); push(I.sub(a, b))
+    elseif op == "i64.mul" then local b = pop(); local a = pop(); push(I.mul(a, b))
+    elseif op == "i64.div_s" then local b = pop(); local a = pop(); push(I.div_s(a, b))
+    elseif op == "i64.div_u" then local b = pop(); local a = pop(); push(I.div_u(a, b))
+    elseif op == "i64.rem_s" then local b = pop(); local a = pop(); push(I.rem_s(a, b))
+    elseif op == "i64.rem_u" then local b = pop(); local a = pop(); push(I.rem_u(a, b))
+    elseif op == "i64.and" then local b = pop(); local a = pop(); push(I.band(a, b))
+    elseif op == "i64.or" then local b = pop(); local a = pop(); push(I.bor(a, b))
+    elseif op == "i64.xor" then local b = pop(); local a = pop(); push(I.bxor(a, b))
+    elseif op == "i64.shl" then local c = pop(); push(I.shl(pop(), c.l % 64))
+    elseif op == "i64.shr_s" then local c = pop(); push(I.shr_s(pop(), c.l % 64))
+    elseif op == "i64.shr_u" then local c = pop(); push(I.shr_u(pop(), c.l % 64))
+    elseif op == "i64.rotl" then local c = pop(); push(I.rotl(pop(), c.l % 64))
+    elseif op == "i64.rotr" then local c = pop(); push(I.rotr(pop(), c.l % 64))
+
+    -- ===== conversions =====
+    elseif op == "i32.wrap_i64" then push(to_u32(pop().l))
+    elseif op == "i64.extend_i32_s" then push(I.from_s32(to_s32(pop())))
+    elseif op == "i64.extend_i32_u" then push(I.from_u32(pop()))
+    elseif op == "i32.extend8_s" then local x = pop() % 256; push(to_u32(x >= 128 and x - 256 or x))
+    elseif op == "i32.extend16_s" then local x = pop() % 65536; push(to_u32(x >= 32768 and x - 65536 or x))
+    elseif op == "i64.extend8_s" then local x = pop().l % 256; push(I.from_double_s(x >= 128 and x - 256 or x))
+    elseif op == "i64.extend16_s" then local x = pop().l % 65536; push(I.from_double_s(x >= 32768 and x - 65536 or x))
+    elseif op == "i64.extend32_s" then push(I.from_s32(to_s32(pop().l)))
+
+    elseif op == "i32.trunc_f32_s" or op == "i32.trunc_f64_s" then
+      local x = ftrunc(pop())
+      if isnan(x) or x < -POW31 or x >= POW31 then trap("invalid conversion to integer") end
+      push(to_u32(x))
+    elseif op == "i32.trunc_f32_u" or op == "i32.trunc_f64_u" then
+      local x = ftrunc(pop())
+      if isnan(x) or x <= -1 or x >= POW32 then trap("invalid conversion to integer") end
+      push(to_u32(x))
+    elseif op == "i64.trunc_f32_s" or op == "i64.trunc_f64_s" then
+      local x = ftrunc(pop())
+      if isnan(x) or x < -POW63 or x >= POW63 then trap("invalid conversion to integer") end
+      push(I.from_double_s(x))
+    elseif op == "i64.trunc_f32_u" or op == "i64.trunc_f64_u" then
+      local x = ftrunc(pop())
+      if isnan(x) or x <= -1 or x >= POW64 then trap("invalid conversion to integer") end
+      push(I.from_double_u(x))
+    elseif op == "i32.trunc_sat_f32_s" or op == "i32.trunc_sat_f64_s" then
+      local x = pop()
+      if isnan(x) then push(0) elseif x < -POW31 then push(to_u32(-POW31)) elseif x >= POW31 then push(POW31 - 1) else push(to_u32(ftrunc(x))) end
+    elseif op == "i32.trunc_sat_f32_u" or op == "i32.trunc_sat_f64_u" then
+      local x = pop()
+      if isnan(x) or x <= 0 then push(0) elseif x >= POW32 then push(POW32 - 1) else push(to_u32(ftrunc(x))) end
+    elseif op == "i64.trunc_sat_f32_s" or op == "i64.trunc_sat_f64_s" then
+      local x = pop()
+      if isnan(x) then push(I.ZERO) elseif x < -POW63 then push(I.mk(0x80000000, 0)) elseif x >= POW63 then push(I.mk(0x7FFFFFFF, 0xFFFFFFFF)) else push(I.from_double_s(ftrunc(x))) end
+    elseif op == "i64.trunc_sat_f32_u" or op == "i64.trunc_sat_f64_u" then
+      local x = pop()
+      if isnan(x) or x <= 0 then push(I.ZERO) elseif x >= POW64 then push(I.mk(0xFFFFFFFF, 0xFFFFFFFF)) else push(I.from_double_u(ftrunc(x))) end
+
+    elseif op == "f32.convert_i32_s" then push(f32round(to_s32(pop())))
+    elseif op == "f32.convert_i32_u" then push(f32round(pop()))
+    elseif op == "f64.convert_i32_s" then push(to_s32(pop()) + 0.0)
+    elseif op == "f64.convert_i32_u" then push(pop() + 0.0)
+    elseif op == "f32.convert_i64_s" then push(f32round(I.to_double_s(pop())))
+    elseif op == "f32.convert_i64_u" then push(f32round(I.to_double_u(pop())))
+    elseif op == "f64.convert_i64_s" then push(I.to_double_s(pop()))
+    elseif op == "f64.convert_i64_u" then push(I.to_double_u(pop()))
+    elseif op == "f32.demote_f64" then push(f32round(pop()))
+    elseif op == "f64.promote_f32" then push(pop())
+
+    elseif op == "i32.reinterpret_f32" then push((sunpack("<I4", spack("<f", pop()))))
+    elseif op == "f32.reinterpret_i32" then push((sunpack("<f", spack("<I4", pop()))))
+    elseif op == "i64.reinterpret_f64" then push(I.from_bytes8(spack("<d", pop())))
+    elseif op == "f64.reinterpret_i64" then push((sunpack("<d", I.to_bytes(pop()))))
+
+    -- ===== float arithmetic =====
+    elseif op == "f64.abs" then push(abs(pop()))
+    elseif op == "f64.neg" then push(-pop())
+    elseif op == "f64.ceil" then push(ceil(pop()))
+    elseif op == "f64.floor" then push(floor(pop()))
+    elseif op == "f64.trunc" then push(ftrunc(pop()))
+    elseif op == "f64.nearest" then push(fnearest(pop()))
+    elseif op == "f64.sqrt" then push(math.sqrt(pop()))
+    elseif op == "f64.add" then local b = pop(); push(pop() + b)
+    elseif op == "f64.sub" then local b = pop(); push(pop() - b)
+    elseif op == "f64.mul" then local b = pop(); push(pop() * b)
+    elseif op == "f64.div" then local b = pop(); push(pop() / b)
+    elseif op == "f64.min" then local b = pop(); push(fmin(pop(), b))
+    elseif op == "f64.max" then local b = pop(); push(fmax(pop(), b))
+    elseif op == "f64.copysign" then local b = pop(); push(copysign(pop(), b))
+    elseif op == "f32.abs" then push(f32round(abs(pop())))
+    elseif op == "f32.neg" then push(f32round(-pop()))
+    elseif op == "f32.ceil" then push(f32round(ceil(pop())))
+    elseif op == "f32.floor" then push(f32round(floor(pop())))
+    elseif op == "f32.trunc" then push(f32round(ftrunc(pop())))
+    elseif op == "f32.nearest" then push(f32round(fnearest(pop())))
+    elseif op == "f32.sqrt" then push(f32round(math.sqrt(pop())))
+    elseif op == "f32.add" then local b = pop(); push(f32round(pop() + b))
+    elseif op == "f32.sub" then local b = pop(); push(f32round(pop() - b))
+    elseif op == "f32.mul" then local b = pop(); push(f32round(pop() * b))
+    elseif op == "f32.div" then local b = pop(); push(f32round(pop() / b))
+    elseif op == "f32.min" then local b = pop(); push(f32round(fmin(pop(), b)))
+    elseif op == "f32.max" then local b = pop(); push(f32round(fmax(pop(), b)))
+    elseif op == "f32.copysign" then local b = pop(); push(f32round(copysign(pop(), b)))
+
+    -- ===== float comparisons (NaN-aware via Lua semantics) =====
+    elseif op == "f32.eq" or op == "f64.eq" then local b = pop(); push(pop() == b and 1 or 0)
+    elseif op == "f32.ne" or op == "f64.ne" then local b = pop(); push(pop() ~= b and 1 or 0)
+    elseif op == "f32.lt" or op == "f64.lt" then local b = pop(); push(pop() < b and 1 or 0)
+    elseif op == "f32.gt" or op == "f64.gt" then local b = pop(); push(pop() > b and 1 or 0)
+    elseif op == "f32.le" or op == "f64.le" then local b = pop(); push(pop() <= b and 1 or 0)
+    elseif op == "f32.ge" or op == "f64.ge" then local b = pop(); push(pop() >= b and 1 or 0)
+
+    -- ===== i64 / float memory =====
+    elseif op == "i64.load" then local a = ea(ins); bounds(a, 8); push(I.from_bytes8(mem:loadstr(a, 8)))
+    elseif op == "i64.store" then local v = pop(); local a = ea(ins); bounds(a, 8); mem:storestr(a, I.to_bytes(v))
+    elseif op == "i64.load8_u" then local a = ea(ins); bounds(a, 1); push(I.from_u32(mem:get8(a)))
+    elseif op == "i64.load8_s" then local a = ea(ins); bounds(a, 1); local b = mem:get8(a); push(I.from_double_s(b >= 128 and b - 256 or b))
+    elseif op == "i64.load16_u" then local a = ea(ins); bounds(a, 2); push(I.from_u32((sunpack("<I2", mem:loadstr(a, 2)))))
+    elseif op == "i64.load16_s" then local a = ea(ins); bounds(a, 2); push(I.from_double_s((sunpack("<i2", mem:loadstr(a, 2)))))
+    elseif op == "i64.load32_u" then local a = ea(ins); bounds(a, 4); push(I.from_u32((sunpack("<I4", mem:loadstr(a, 4)))))
+    elseif op == "i64.load32_s" then local a = ea(ins); bounds(a, 4); push(I.from_s32(to_s32((sunpack("<I4", mem:loadstr(a, 4))))))
+    elseif op == "i64.store8" then local v = pop(); local a = ea(ins); bounds(a, 1); mem:set8(a, v.l % 256)
+    elseif op == "i64.store16" then local v = pop(); local a = ea(ins); bounds(a, 2); mem:storestr(a, spack("<I2", v.l % 65536))
+    elseif op == "i64.store32" then local v = pop(); local a = ea(ins); bounds(a, 4); mem:storestr(a, spack("<I4", v.l))
+    elseif op == "f32.load" then local a = ea(ins); bounds(a, 4); push((sunpack("<f", mem:loadstr(a, 4))))
+    elseif op == "f32.store" then local v = pop(); local a = ea(ins); bounds(a, 4); mem:storestr(a, spack("<f", v))
+    elseif op == "f64.load" then local a = ea(ins); bounds(a, 8); push((sunpack("<d", mem:loadstr(a, 8))))
+    elseif op == "f64.store" then local v = pop(); local a = ea(ins); bounds(a, 8); mem:storestr(a, spack("<d", v))
+
+    -- ===== const (float) =====
+    elseif op == "f32.const" then push(ins.v)
+    elseif op == "f64.const" then push(ins.v)
 
     else
       error("interp: unhandled op " .. tostring(op))
