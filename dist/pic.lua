@@ -101,10 +101,18 @@ else
   msg = { action = "run", program = table.concat(lines, "\n") }
 end
 
+local label = (session or "main") .. "@" .. name
+local t0 = os.clock()
 local reply = ask(msg)
-if not reply then print("pic: timeout waiting for daemon.")
+if not reply then print("pic: timeout waiting for " .. label .. ".")
 elseif type(reply) == "table" then
-  io.write(reply.output or "")
-  if reply.output and reply.output:sub(-1) ~= "\n" then io.write("\n") end
-  if not reply.ok then print("(daemon reported an error)") end
+  local out = reply.output or ""
+  if msg.action == "query" then
+    -- raw REPL output: drop the echo of our own goal and the trailing prompt
+    out = out:gsub("^[^\n]*\n", "", 1):gsub("%s*Picat>%s*$", "")
+  end
+  io.write(out)
+  if out ~= "" and out:sub(-1) ~= "\n" then io.write("\n") end
+  -- close the loop: which session answered, how it went, how long it took
+  print(("[%s %s in %ds]"):format(label, reply.ok and "ok" or "ERROR", math.floor(os.clock() - t0 + 0.5)))
 end
