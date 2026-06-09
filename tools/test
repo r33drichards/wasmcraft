@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Run every test/*_test.lua on both lua5.4 (fast) and Cobalt (the real target).
+# Each test prints ALL_PASS on success / FAILED on failure; we grep for those.
+# Usage: nix-shell --run "tools/test [pattern]"
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+pat="${1:-}"
+fail=0
+
+run_one() {
+  local label="$1"; shift
+  local out; out="$("$@" 2>&1)"
+  if echo "$out" | grep -q "ALL_PASS" && ! echo "$out" | grep -q "FAILED"; then
+    printf "  ok   %-28s %s\n" "$label" "$(echo "$out" | grep assertions || true)"
+  else
+    printf "  FAIL %-28s\n" "$label"
+    echo "$out" | sed 's/^/      /'
+    fail=1
+  fi
+}
+
+for t in test/*_test.lua; do
+  [ -e "$t" ] || continue
+  if [ -n "$pat" ] && [[ "$t" != *"$pat"* ]]; then continue; fi
+  name="$(basename "$t")"
+  run_one "lua54:$name"  lua "$t"
+  run_one "cobalt:$name" "$ROOT/tools/cobalt" "$t"
+done
+
+if [ "$fail" -eq 0 ]; then echo "== all green =="; else echo "== FAILURES =="; fi
+exit $fail
