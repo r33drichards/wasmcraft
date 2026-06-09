@@ -246,6 +246,14 @@ end
 -- ---- monitor: two grids side by side, animation loops, blurb beneath --------
 local function render_monitor(mon)
   local C = colors or colours
+  -- monitors keep whatever palette the last program set on them; reset to the
+  -- defaults so our colors mean what we think they mean
+  if mon.setPaletteColour and term and term.nativePaletteColour then
+    for i = 0, 15 do
+      local c = 2 ^ i
+      mon.setPaletteColour(c, term.nativePaletteColour(c))
+    end
+  end
   local gw, gh = A.bounds.x + 1, A.bounds.y + 1
   -- one text scale serves the whole monitor, and it sizes the blurb text: use
   -- the LARGEST scale that still fits both grids (>=2 chars/cell) + the blurb
