@@ -2900,7 +2900,7 @@ function M.open(opts)
     root = opts.root or ".",
     write = opts.write or io.write,
   })
-  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host })
+  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = opts.mode or "jit" })
   inst:call("_initialize")
   local db = setmetatable({ inst = inst }, Db)
   if opts.path then
