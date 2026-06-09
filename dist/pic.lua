@@ -45,10 +45,20 @@ local function ask(m, timeout)
   m.id = tostring(os.getComputerID and os.getComputerID() or 0) .. ":" .. reqn .. ":" ..
     tostring(os.epoch and os.epoch("utc") or os.clock())
   rednet.send(id, m, PROTO)
-  local deadline = os.clock() + (timeout or 300)
+  local t0 = os.clock()
+  local deadline, lastpoll, statid = t0 + (timeout or 300), t0, nil
+  local poll = m.action == "run" or m.action == "query" -- liveness for slow jobs
   while os.clock() < deadline do
-    local _, r = rednet.receive(PROTO, deadline - os.clock())
-    if type(r) == "table" and (r.id == m.id or r.id == nil) then
+    local _, r = rednet.receive(PROTO, 5)
+    if r == nil and poll and os.clock() - lastpoll >= 30 then
+      lastpoll = os.clock()
+      statid = m.id .. ":st" .. math.floor(lastpoll)
+      rednet.send(id, { action = "status", id = statid }, PROTO)
+    elseif type(r) == "table" and r.id == statid then
+      local want = (session or "main") .. ":"
+      local line = tostring(r.output or ""):match(want:gsub("%-", "%%-") .. "[^\n]*")
+      print(("(daemon alive: %s) [%ds]"):format(line or "status ok", os.clock() - t0))
+    elseif type(r) == "table" and (r.id == m.id or r.id == nil) then
       if r.status then
         print("(" .. tostring(r.status) .. ")")
       else

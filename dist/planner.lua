@@ -82,15 +82,24 @@ local function daemon_solve()
   print("solving on picatd #" .. id .. " (session 'planner', job " .. mid:sub(1, 24) .. ")")
   rednet.send(id, { action = "run", program = PROGRAM, session = "planner", id = mid }, PROTO)
   local t0 = os.clock()
-  local deadline, lastbeat = t0 + 600, t0
+  local deadline, lastbeat, lastpoll, statid = t0 + 600, t0, t0, nil
   while os.clock() < deadline do
     -- short receive slices so we can heartbeat while waiting
     local _, r = rednet.receive(PROTO, 5)
     if r == nil then
-      if os.clock() - lastbeat >= 15 then
-        lastbeat = os.clock()
-        print(("(still waiting on daemon... %ds elapsed)"):format(os.clock() - t0))
+      local now = os.clock()
+      if now - lastpoll >= 30 then
+        -- ask the daemon what it's doing so a long solve is visibly alive
+        lastpoll = now
+        statid = mid .. ":st" .. math.floor(now)
+        rednet.send(id, { action = "status", id = statid }, PROTO)
+      elseif now - lastbeat >= 15 then
+        lastbeat = now
+        print(("(still waiting on daemon... %ds elapsed)"):format(now - t0))
       end
+    elseif type(r) == "table" and r.id == statid then
+      local line = tostring(r.output or ""):match("planner:[^\n]*")
+      print(("(daemon alive: %s) [%ds]"):format(line or "status ok", os.clock() - t0))
     elseif type(r) == "table" and (r.id == mid or r.id == nil) then
       if r.status then print(("(daemon: %s) [%ds]"):format(tostring(r.status), os.clock() - t0))
       elseif r.ok then
