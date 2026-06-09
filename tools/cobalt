@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Run a Lua script through the standalone Cobalt VM (the engine CC:Tweaked uses).
+# Usage: tools/cobalt <script.lua> [args...]
+# Compiles CobaltRunner.java once (cached) and runs it under a nix-provided JDK.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+JAR="$ROOT/vendor/Cobalt-0.7.3.jar"
+CLASSES="$ROOT/tools/classes"
+SRC="$ROOT/tools/CobaltRunner.java"
+
+run() {
+  if [ ! -f "$CLASSES/CobaltRunner.class" ] || [ "$SRC" -nt "$CLASSES/CobaltRunner.class" ]; then
+    mkdir -p "$CLASSES"
+    javac -cp "$JAR" -d "$CLASSES" "$SRC"
+  fi
+  exec java -cp "$JAR:$CLASSES" CobaltRunner "$@"
+}
+
+if command -v java >/dev/null 2>&1 && command -v javac >/dev/null 2>&1; then
+  run "$@"
+else
+  exec nix shell nixpkgs#temurin-bin-21 --command bash -c '
+    set -euo pipefail
+    JAR="'"$JAR"'"; CLASSES="'"$CLASSES"'"; SRC="'"$SRC"'"
+    if [ ! -f "$CLASSES/CobaltRunner.class" ] || [ "$SRC" -nt "$CLASSES/CobaltRunner.class" ]; then
+      mkdir -p "$CLASSES"; javac -cp "$JAR" -d "$CLASSES" "$SRC"
+    fi
+    exec java -cp "$JAR:$CLASSES" CobaltRunner "$@"
+  ' _ "$@"
+fi
