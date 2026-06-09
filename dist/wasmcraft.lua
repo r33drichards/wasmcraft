@@ -837,116 +837,360 @@ end
 return M
 end
 preload['wasi'] = function(...)
--- Minimal WASI preview1 host, enough to boot a wasi-libc "command" module
--- (one that writes to stdout/stderr and exits). Host functions receive the
--- interpreter's internal arg array (i32 = number, i64 = {h,l}) and the instance,
--- and return an array of results. Memory is reached via inst.memory.
+-- Minimal WASI preview1 host. Two tiers:
+--   * stdout/clock/args/etc. — enough to boot a wasi-libc "command" module.
+--   * a real filesystem (preopened dir + path_open/fd_read/fd_write/fd_seek/
+--     filestat/unlink/...) backed by host files, so SQLite persists an on-disk
+--     .db through WASI. Each fd keeps an in-memory image (random read/write/seek);
+--     the host file is read whole on open and written whole on sync/close, which
+--     is all CC's fs API supports.
 local spack, sunpack = string.pack, string.unpack
+local schar = string.char
+local floor = math.floor
 
 local M = {}
 M.EXIT = {} -- unique marker table for proc_exit unwinding
 
+-- ---- little-endian struct writers/readers over linear memory --------------
 local function ru32(mem, a) return (sunpack("<I4", mem:loadstr(a, 4))) end
 local function wu32(mem, a, v) mem:storestr(a, spack("<I4", v % 4294967296)) end
-local function wu64(mem, a, v) mem:storestr(a, spack("<I4", v % 4294967296)); mem:storestr(a + 4, spack("<I4", 0)) end
+local function wu64(mem, a, v)
+  v = floor(v)
+  mem:storestr(a, spack("<I4", v % 4294967296))
+  mem:storestr(a + 4, spack("<I4", floor(v / 4294967296) % 4294967296))
+end
+local function i64num(v) -- interpreter passes i64 as {h,l}
+  if type(v) == "table" then
+    local n = v.h * 4294967296 + v.l
+    if v.h >= 0x80000000 then n = n - 2 ^ 64 end
+    return n
+  end
+  return v
+end
+local function hasflag(x, f) return floor(x / f) % 2 == 1 end
 
--- opts: { write = function(str), writeerr = function(str), args = {..}, env = {..} }
+-- ---- in-memory file image (random access; flushed whole) ------------------
+local FileImage = {}
+FileImage.__index = FileImage
+
+local function bytes_to_string(b, from, to) -- [from,to) 0-indexed
+  local parts, chunk, ci = {}, {}, 0
+  for i = from, to - 1 do
+    ci = ci + 1; chunk[ci] = b[i] or 0
+    if ci == 4096 then parts[#parts + 1] = schar((table.unpack or unpack)(chunk)); ci = 0; chunk = {} end
+  end
+  if ci > 0 then
+    local last = {}
+    for k = 1, ci do last[k] = chunk[k] end
+    parts[#parts + 1] = schar((table.unpack or unpack)(last))
+  end
+  return table.concat(parts)
+end
+
+function FileImage.new(s)
+  local o = setmetatable({ b = {}, len = 0, dirty = false }, FileImage)
+  if s and #s > 0 then o:write(0, s) end
+  o.dirty = false
+  return o
+end
+function FileImage:read(pos, n)
+  local e = pos + n; if e > self.len then e = self.len end
+  if e <= pos then return "" end
+  return bytes_to_string(self.b, pos, e)
+end
+function FileImage:write(pos, s)
+  local b = self.b
+  for i = 1, #s do b[pos + i - 1] = string.byte(s, i) end
+  local nend = pos + #s
+  if nend > self.len then self.len = nend end
+  self.dirty = true
+end
+function FileImage:truncate(n)
+  if n < self.len then for i = n, self.len - 1 do self.b[i] = nil end end
+  self.len = n; self.dirty = true
+end
+function FileImage:tostring() return bytes_to_string(self.b, 0, self.len) end
+
+-- ---- default host filesystem backends ------------------------------------
+-- A host fs is: { read(path)->str|nil, write(path,data), exists(path)->bool,
+--                 unlink(path), size(path)->n|nil, mkdir(path) }
+local function io_hostfs(root)
+  root = root or "."
+  local function full(p)
+    if p:sub(1, 1) == "/" then return p end
+    if p:sub(1, 2) == "./" then p = p:sub(3) end
+    return root .. "/" .. p
+  end
+  return {
+    read = function(p) local f = io.open(full(p), "rb"); if not f then return nil end local d = f:read("*a"); f:close(); return d end,
+    write = function(p, d) local f = assert(io.open(full(p), "wb")); f:write(d); f:close() end,
+    exists = function(p) local f = io.open(full(p), "rb"); if f then f:close(); return true end return false end,
+    size = function(p) local f = io.open(full(p), "rb"); if not f then return nil end local n = f:seek("end"); f:close(); return n end,
+    unlink = function(p) os.remove(full(p)) end,
+    mkdir = function() end,
+  }
+end
+M.io_hostfs = io_hostfs
+
+-- ---- WASI errnos / constants ---------------------------------------------
+local E = { SUCCESS = 0, BADF = 8, EXIST = 20, INVAL = 28, ISDIR = 31, NOENT = 44, NOSYS = 52, NOTDIR = 54 }
+local FT = { unknown = 0, chardev = 2, dir = 3, file = 4 }
+
+-- opts: { write, writeerr, args, env, fs = <hostfs>, root = "." }
 function M.make(opts)
   opts = opts or {}
   local write = opts.write or io.write
   local writeerr = opts.writeerr or write
   local argv = opts.args or {}
-  local env = opts.env or {}
+  local hostfs = opts.fs
+  if hostfs == nil and opts.root then hostfs = io_hostfs(opts.root) end
 
   local W = {}
 
-  -- fd_write(fd, iovs, iovs_len, nwritten) -> errno
+  -- file descriptor table (0/1/2 std; 3 = preopened ".")
+  local fds = {
+    [0] = { kind = "stdin" }, [1] = { kind = "stdout" }, [2] = { kind = "stderr" },
+  }
+  if hostfs then fds[3] = { kind = "dir", name = "/" } end
+  local next_fd = 4
+  local PRENAME = "/" -- preopen the root; SQLite absolutizes paths via getcwd
+  -- name -> entry, so path-based stat/unlink see files that are open (and only
+  -- flushed to disk on sync/close) and directories created for dotfile locking.
+  local byname = {}
+
+  local function resolve(path) return path end -- wasi-libc already stripped the preopen prefix
+
+  -- ---- streams + non-fs basics -------------------------------------------
   W.fd_write = function(a, inst)
     local mem = inst.memory
     local fd, iovs, iovs_len, nwritten = a[1], a[2], a[3], a[4]
     local parts, total = {}, 0
     for k = 0, iovs_len - 1 do
       local base = iovs + k * 8
-      local ptr = ru32(mem, base)
-      local len = ru32(mem, base + 4)
-      parts[#parts + 1] = mem:loadstr(ptr, len)
-      total = total + len
+      local ptr = ru32(mem, base); local len = ru32(mem, base + 4)
+      parts[#parts + 1] = mem:loadstr(ptr, len); total = total + len
     end
     local s = table.concat(parts)
-    if fd == 2 then writeerr(s) else write(s) end
+    local e = fds[fd]
+    if e and e.kind == "file" then
+      if e.append then e.pos = e.img.len end
+      e.img:write(e.pos, s); e.pos = e.pos + #s
+    elseif fd == 2 then writeerr(s) else write(s) end
     wu32(mem, nwritten, total)
     return { 0 }
   end
 
-  W.fd_read = function(a, inst) wu32(inst.memory, a[4], 0); return { 0 } end -- EOF
-  W.fd_close = function() return { 0 } end
-  W.fd_datasync = function() return { 0 } end
-  W.fd_sync = function() return { 0 } end
-
-  -- fd_seek(fd, offset:i64, whence, newoffset) -> errno; report position 0
-  W.fd_seek = function(a, inst) wu64(inst.memory, a[4], 0); return { 0 } end
-  W.fd_tell = function(a, inst) wu64(inst.memory, a[2], 0); return { 0 } end
-
-  -- fd_fdstat_get(fd, buf) -> errno; report a character device so libc fully buffers
-  W.fd_fdstat_get = function(a, inst)
-    local mem, buf = inst.memory, a[2]
-    for i = 0, 23 do mem:set8(buf + i, 0) end
-    mem:set8(buf, 2) -- fs_filetype = CHARACTER_DEVICE
+  W.fd_read = function(a, inst)
+    local mem = inst.memory
+    local fd, iovs, iovs_len, nread = a[1], a[2], a[3], a[4]
+    local e = fds[fd]
+    local total = 0
+    if e and e.kind == "file" then
+      for k = 0, iovs_len - 1 do
+        local base = iovs + k * 8
+        local ptr = ru32(mem, base); local len = ru32(mem, base + 4)
+        local chunk = e.img:read(e.pos, len)
+        mem:storestr(ptr, chunk); e.pos = e.pos + #chunk; total = total + #chunk
+        if #chunk < len then break end
+      end
+    end
+    wu32(mem, nread, total)
     return { 0 }
   end
-  W.fd_fdstat_set_flags = function() return { 0 } end
-  W.fd_prestat_get = function() return { 8 } end       -- EBADF: no preopened dirs
-  W.fd_prestat_dir_name = function() return { 8 } end
 
-  -- args_sizes_get(argc_ptr, argv_buf_size_ptr)
-  W.args_sizes_get = function(a, inst)
-    local mem = inst.memory
-    local nbytes = 0
-    for _, s in ipairs(argv) do nbytes = nbytes + #s + 1 end
-    wu32(mem, a[1], #argv)
-    wu32(mem, a[2], nbytes)
+  local function flush(e)
+    if e.kind == "file" and e.img.dirty and hostfs then
+      hostfs.write(e.hostpath, e.img:tostring()); e.img.dirty = false
+    end
+  end
+
+  W.fd_close = function(a)
+    local e = fds[a[1]]
+    if e then flush(e); fds[a[1]] = nil; if e.hostpath then byname[e.hostpath] = nil end end
     return { 0 }
+  end
+  W.fd_sync = function(a) local e = fds[a[1]]; if e then flush(e) end return { 0 } end
+  W.fd_datasync = W.fd_sync
+
+  W.fd_seek = function(a, inst)
+    local fd, off, whence, outp = a[1], i64num(a[2]), a[3], a[4]
+    local e = fds[fd]
+    if not e then return { E.BADF } end
+    if e.kind == "file" then
+      local base = (whence == 0 and 0) or (whence == 1 and e.pos) or e.img.len
+      e.pos = base + off
+      wu64(inst.memory, outp, e.pos)
+      return { 0 }
+    end
+    wu64(inst.memory, outp, 0)
+    return { 0 }
+  end
+
+  W.fd_fdstat_get = function(a, inst)
+    local mem, fd, buf = inst.memory, a[1], a[2]
+    for i = 0, 23 do mem:set8(buf + i, 0) end
+    local e = fds[fd]
+    local ft = FT.chardev
+    if e then
+      if e.kind == "file" then ft = FT.file elseif e.kind == "dir" then ft = FT.dir end
+    end
+    mem:set8(buf, ft)
+    -- grant all rights so libc permits every op
+    mem:storestr(buf + 8, spack("<I4", 0xFFFFFFFF) .. spack("<I4", 0xFFFFFFFF))
+    mem:storestr(buf + 16, spack("<I4", 0xFFFFFFFF) .. spack("<I4", 0xFFFFFFFF))
+    return { 0 }
+  end
+  W.fd_fdstat_set_flags = function(a) local e = fds[a[1]]; if e then e.append = hasflag(a[2], 1) end return { 0 } end
+
+  local function write_filestat(mem, buf, filetype, size)
+    for i = 0, 63 do mem:set8(buf + i, 0) end
+    mem:set8(buf + 16, filetype)   -- filetype
+    mem:storestr(buf + 24, spack("<I4", 1) .. spack("<I4", 0)) -- nlink = 1
+    wu64(mem, buf + 32, size)      -- size
+  end
+
+  W.fd_filestat_get = function(a, inst)
+    local e = fds[a[1]]
+    if not e then return { E.BADF } end
+    local ft = (e.kind == "file" and FT.file) or (e.kind == "dir" and FT.dir) or FT.chardev
+    write_filestat(inst.memory, a[2], ft, e.img and e.img.len or 0)
+    return { 0 }
+  end
+  W.fd_filestat_set_size = function(a)
+    local e = fds[a[1]]; if not (e and e.img) then return { E.BADF } end
+    e.img:truncate(i64num(a[2]))
+    return { 0 }
+  end
+
+  W.fd_prestat_get = function(a, inst)
+    if a[1] == 3 and hostfs then
+      local mem, buf = inst.memory, a[2]
+      mem:set8(buf, 0)               -- tag = dir
+      wu32(mem, buf + 4, #PRENAME)   -- name length
+      return { 0 }
+    end
+    return { E.BADF }
+  end
+  W.fd_prestat_dir_name = function(a, inst)
+    if a[1] == 3 then inst.memory:storestr(a[2], PRENAME:sub(1, a[3])); return { 0 } end
+    return { E.BADF }
+  end
+
+  -- path ops (dirfd is the preopen; we resolve names directly via hostfs)
+  local function path_str(mem, ptr, len)
+    local s = mem:loadstr(ptr, len)
+    if opts.debug then (opts.debug == true and print or opts.debug)("  path='" .. s .. "'") end
+    return s
+  end
+
+  W.path_open = function(a, inst)
+    if not hostfs then return { E.NOSYS } end
+    local mem = inst.memory
+    local path = resolve(path_str(mem, a[3], a[4]))
+    local oflags, fdflags, outp = a[5], a[8], a[9]
+    local creat = hasflag(oflags, 1)
+    local trunc = hasflag(oflags, 8)
+    local excl = hasflag(oflags, 4)
+    local exists = hostfs.exists(path)
+    if not exists and not creat then return { E.NOENT } end
+    if exists and creat and excl then return { E.EXIST } end
+    local data = (exists and not trunc) and (hostfs.read(path) or "") or ""
+    local fd = next_fd; next_fd = next_fd + 1
+    local e = { kind = "file", hostpath = path, img = FileImage.new(data), pos = 0, append = hasflag(fdflags, 1) }
+    if (trunc and exists) or not exists then e.img.dirty = true end
+    fds[fd] = e
+    byname[path] = e
+    wu32(mem, outp, fd)
+    return { 0 }
+  end
+
+  W.path_filestat_get = function(a, inst)
+    if not hostfs then return { E.NOSYS } end
+    local path = resolve(path_str(inst.memory, a[3], a[4]))
+    local e = byname[path]
+    if e then
+      write_filestat(inst.memory, a[5], e.kind == "dir" and FT.dir or FT.file, e.img and e.img.len or 0)
+      return { 0 }
+    end
+    local sz = hostfs.size(path)
+    if sz == nil then return { E.NOENT } end
+    write_filestat(inst.memory, a[5], FT.file, sz)
+    return { 0 }
+  end
+
+  W.path_unlink_file = function(a, inst)
+    if not hostfs then return { E.NOSYS } end
+    local path = resolve(path_str(inst.memory, a[2], a[3]))
+    byname[path] = nil
+    hostfs.unlink(path)
+    return { 0 }
+  end
+  W.path_create_directory = function(a, inst)
+    local path = resolve(path_str(inst.memory, a[2], a[3]))
+    byname[path] = { kind = "dir" }
+    if hostfs then hostfs.mkdir(path) end
+    return { 0 }
+  end
+  W.path_remove_directory = function(a, inst)
+    byname[resolve(path_str(inst.memory, a[2], a[3]))] = nil
+    return { 0 }
+  end
+  W.path_filestat_set_times = function() return { 0 } end
+  W.path_readlink = function() return { E.INVAL } end
+  W.path_rename = function() return { E.NOSYS } end
+
+  -- ---- non-fs basics ------------------------------------------------------
+  W.args_sizes_get = function(a, inst)
+    local nbytes = 0; for _, s in ipairs(argv) do nbytes = nbytes + #s + 1 end
+    wu32(inst.memory, a[1], #argv); wu32(inst.memory, a[2], nbytes); return { 0 }
   end
   W.args_get = function(a, inst)
-    local mem = inst.memory
-    local argv_ptr, buf = a[1], a[2]
+    local mem, argv_ptr, buf = inst.memory, a[1], a[2]
     for i, s in ipairs(argv) do
       wu32(mem, argv_ptr + (i - 1) * 4, buf)
-      mem:storestr(buf, s); mem:set8(buf + #s, 0)
-      buf = buf + #s + 1
+      mem:storestr(buf, s); mem:set8(buf + #s, 0); buf = buf + #s + 1
     end
     return { 0 }
   end
-  W.environ_sizes_get = function(a, inst)
-    wu32(inst.memory, a[1], 0); wu32(inst.memory, a[2], 0); return { 0 }
-  end
+  W.environ_sizes_get = function(a, inst) wu32(inst.memory, a[1], 0); wu32(inst.memory, a[2], 0); return { 0 } end
   W.environ_get = function() return { 0 } end
 
-  -- clock_time_get(id, precision:i64, time_ptr) -> errno; coarse time via os.time
   W.clock_time_get = function(a, inst)
     local secs = (os.time and os.time()) or 0
-    -- nanoseconds as i64 low/high (seconds * 1e9 truncated to 64-bit low word range)
-    local ns = secs * 1000000000
-    inst.memory:storestr(a[3], spack("<I4", ns % 4294967296))
-    inst.memory:storestr(a[3] + 4, spack("<I4", math.floor(ns / 4294967296) % 4294967296))
+    wu64(inst.memory, a[3], secs * 1000000000)
     return { 0 }
   end
   W.clock_res_get = function(a, inst) wu64(inst.memory, a[2], 1000); return { 0 } end
-
   W.random_get = function(a, inst)
     local mem, buf, len = inst.memory, a[1], a[2]
-    for i = 0, len - 1 do mem:set8(buf + i, (i * 1103515245 + 12345) % 256) end
+    local seed = (os.time and os.time()) or 1
+    for i = 0, len - 1 do seed = (seed * 1103515245 + 12345) % 4294967296; mem:set8(buf + i, floor(seed / 65536) % 256) end
     return { 0 }
   end
-
   W.poll_oneoff = function() return { 0 } end
   W.sched_yield = function() return { 0 } end
   W.proc_exit = function(a) error({ [M.EXIT] = true, code = a[1] or 0 }) end
 
-  -- Unknown imports: a stub that returns errno 52 (ENOSYS).
-  return setmetatable(W, { __index = function(_, k)
-    return function() return { 52 } end
-  end })
+  -- optional call tracing
+  if opts.debug then
+    local dbg = opts.debug == true and print or opts.debug
+    local function av(x) if type(x) == "table" then return i64num(x) end return x end
+    for k, fn in pairs(W) do
+      W[k] = function(a, inst)
+        local r = fn(a, inst)
+        dbg(string.format("WASI %-22s args=%s,%s,%s,%s,%s -> %s", k,
+          tostring(av(a[1])), tostring(av(a[2])), tostring(av(a[3])), tostring(av(a[4])), tostring(av(a[5])),
+          tostring(r and r[1])))
+        return r
+      end
+    end
+    return setmetatable(W, { __index = function(_, name)
+      return function() dbg("WASI " .. name .. " (stub) -> NOSYS"); return { E.NOSYS } end
+    end })
+  end
+
+  -- unknown imports: stub returning ENOSYS (single i32 result)
+  return setmetatable(W, { __index = function() return function() return { E.NOSYS } end end })
 end
 
 return M
@@ -1526,6 +1770,119 @@ M.set_yield = interp.set_yield
 
 return M
 end
+preload['sql'] = function(...)
+-- Generic SQLite query API for the wasm interpreter.
+-- Drives the wq.wasm reactor (exports wq_open/wq_exec/...) and persists to a
+-- real file through the WASI filesystem in wasi.lua.
+--
+--   local sql = require("sql")
+--   local db  = sql.open{ module = wqBytes, path = "test.db", root = "/tmp/db" }
+--   db:exec("CREATE TABLE t(a,b)")
+--   db:exec("INSERT INTO t VALUES(1,'x')")
+--   local r = db:query("SELECT * FROM t")   -- { columns = {...}, rows = {...} }
+--   db:close()                              -- flushes the file
+local wasm = require("wasm")
+local wasi = require("wasi")
+
+local M = {}
+M.NULL = setmetatable({}, { __tostring = function() return "NULL" end })
+
+local RS, US, NULM = "\30", "\31", "\29"
+
+local function read_cstr(mem, ptr)
+  local parts, i = {}, ptr
+  while true do
+    local chunk = mem:loadstr(i, 1024)
+    local z = chunk:find("\0", 1, true)
+    if z then parts[#parts + 1] = chunk:sub(1, z - 1); break end
+    parts[#parts + 1] = chunk
+    i = i + 1024
+  end
+  return table.concat(parts)
+end
+
+local function split(s, sep)
+  local out, start = {}, 1
+  while true do
+    local p = s:find(sep, start, true)
+    if not p then out[#out + 1] = s:sub(start); break end
+    out[#out + 1] = s:sub(start, p - 1); start = p + 1
+  end
+  return out
+end
+
+local Db = {}
+Db.__index = Db
+
+local function wstr(db, s)
+  local ptr = db.inst:call("wq_malloc", #s + 1)
+  db.inst.memory:storestr(ptr, s)
+  db.inst.memory:set8(ptr + #s, 0)
+  return ptr
+end
+
+function Db:exec(sql)
+  local p = wstr(self, sql)
+  local rc = self.inst:call("wq_exec", p)
+  self.inst:call("wq_free", p)
+  if rc ~= 0 then
+    error("sqlite error: " .. read_cstr(self.inst.memory, self.inst:call("wq_errmsg")), 2)
+  end
+  return self
+end
+
+-- Run SQL and return { columns = {names...}, rows = { row, ... } }.
+-- Each row is keyed by both column index and column name; NULL is M.NULL.
+function Db:query(sql)
+  self:exec(sql)
+  local res = read_cstr(self.inst.memory, self.inst:call("wq_result"))
+  local out = { columns = {}, rows = {} }
+  if #res == 0 then return out end
+  local records = {}
+  for _, r in ipairs(split(res, RS)) do if #r > 0 then records[#records + 1] = r end end
+  if #records == 0 then return out end
+  out.columns = split(records[1], US)
+  for i = 2, #records do
+    local fields = split(records[i], US)
+    local row = {}
+    for j = 1, #out.columns do
+      local v = fields[j]
+      if v == NULM then v = M.NULL end
+      row[j] = v
+      row[out.columns[j]] = v
+    end
+    out.rows[#out.rows + 1] = row
+  end
+  return out
+end
+
+function Db:changes() return self.inst:call("wq_changes") end
+function Db:version() return read_cstr(self.inst.memory, self.inst:call("wq_version")) end
+function Db:close() self.inst:call("wq_close"); return self end
+
+-- opts: { module = <wq.wasm bytes>, path = "db.sqlite", fs = <hostfs> | root = dir, write }
+function M.open(opts)
+  assert(opts and opts.module, "sql.open requires opts.module (wq.wasm bytes)")
+  local module = wasm.load(opts.module)
+  local host = wasi.make({
+    fs = opts.fs,
+    root = opts.root or ".",
+    write = opts.write or io.write,
+  })
+  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host })
+  inst:call("_initialize")
+  local db = setmetatable({ inst = inst }, Db)
+  if opts.path then
+    local p = wstr(db, opts.path)
+    local rc = inst:call("wq_open", p)
+    inst:call("wq_free", p)
+    if rc ~= 0 then error("sqlite open failed: " .. read_cstr(inst.memory, inst:call("wq_errmsg"))) end
+  end
+  return db
+end
+
+return M
+end
 preload['bit_native'] = function(...)
   return assert((loadstring or load)([==[
 -- bit32-compatible API built on Lua 5.3+/5.4 native bitwise operators.
@@ -1581,7 +1938,7 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, set_yield = wasm.set_yield }
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield }
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a
@@ -1612,6 +1969,39 @@ end
 
 function wasmcraft.run_file(path, args)
   return wasmcraft.run_wasi(read_bytes(path), args or { path })
+end
+
+-- A host filesystem backed by CC's fs API (for sql persistence in-game).
+local function cc_hostfs(root)
+  root = root or ""
+  local function full(p)
+    if p:sub(1, 1) == "/" then p = p:sub(2) end
+    return root == "" and p or fs.combine(root, p)
+  end
+  return {
+    read = function(p) p = full(p); if not fs.exists(p) then return nil end local h = fs.open(p, "rb"); local d = h.readAll(); h.close(); return d end,
+    write = function(p, d) p = full(p); local h = fs.open(p, "wb"); h.write(d); h.close() end,
+    exists = function(p) return fs.exists(full(p)) end,
+    size = function(p) p = full(p); if not fs.exists(p) then return nil end return fs.getSize(p) end,
+    unlink = function(p) p = full(p); if fs.exists(p) then fs.delete(p) end end,
+    mkdir = function(p) fs.makeDir(full(p)) end,
+  }
+end
+
+-- Pick a filesystem backend appropriate to the host VM (CC fs, else Lua io).
+function wasmcraft.hostfs(root)
+  if type(fs) == "table" and fs.open then return cc_hostfs(root) end
+  return nil -- sql.open builds a Lua io backend from `root`
+end
+
+-- Open a SQLite database with the generic query API and file persistence.
+--   opts: { modulePath = "wq.wasm" | module = <bytes>, path = "my.db", root = "" }
+function wasmcraft.opendb(opts)
+  local module = opts.module or read_bytes(opts.modulePath or "wq.wasm")
+  return wasmcraft.sql.open({
+    module = module, path = opts.path,
+    fs = opts.fs or wasmcraft.hostfs(opts.root), root = opts.root,
+  })
 end
 
 -- auto-run when invoked as a CC/Cobalt program with a filename argument

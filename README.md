@@ -104,6 +104,43 @@ wasmcraft sqlite.wasm
 → runs `CREATE`/`INSERT`/`SELECT`/aggregate, takes a few seconds. (The full
 4.4 MB `-O2` build, `wasm/sqlite.wasm`, needs a raised `computer_space_limit`.)
 
+## Generic SQL query API with file persistence
+
+`wq.wasm` is a SQLite *reactor* module (compiled from `csrc/wq.c` + the
+amalgamation) that exports `wq_open`/`wq_exec`/`wq_result`/… The `src/sql.lua`
+wrapper drives it and, crucially, persistence goes through a **real WASI
+filesystem** implemented in `src/wasi.lua` (`path_open`/`fd_read`/`fd_write`/
+`fd_seek`/`filestat`/`unlink` + a preopened root, dotfile locking, in-memory file
+images flushed whole on sync/close). The on-disk file is a genuine SQLite
+database — the native `sqlite3` CLI reads and writes the very same file.
+
+```lua
+local wasmcraft = assert(loadfile("wasmcraft"))()        -- load the bundle
+local db = wasmcraft.opendb{ modulePath = "wq.wasm", path = "notes.db", root = "" }
+
+db:exec("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT, n REAL)")
+db:exec("INSERT INTO notes(body,n) VALUES('hello',1.5),('world',2.0)")
+
+local r = db:query("SELECT id, body, n FROM notes WHERE n > 1.0 ORDER BY n DESC")
+for _, row in ipairs(r.rows) do print(row.id, row.body, row.n) end   -- keyed by name or index
+-- r.columns = {"id","body","n"};  NULL fields == wasmcraft.sql.NULL
+
+db:close()   -- flushes notes.db to the host/computer disk
+```
+
+The same `notes.db` can then be opened by `sqlite3 notes.db` natively, and a
+later `opendb` of the same path sees the persisted rows. In-game, fetch the
+737 KB reactor and query a database stored on the computer:
+
+```
+wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
+wget https://paste-production.up.railway.app/wc-wq.wasm wq.wasm
+-- then in a Lua program: wasmcraft.opendb{ modulePath="wq.wasm", path="notes.db" }
+```
+
+`root` selects the directory (host path for standalone, CC `fs` path in-game);
+the backend is auto-detected (`fs` API on CC, Lua `io` otherwise).
+
 ## Coverage (honest scope)
 
 Implements the slice of the WASM spec that real LLVM/clang C output uses:

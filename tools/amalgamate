@@ -18,7 +18,7 @@ OUT=dist/wasmcraft.lua
   echo "  local f = preload[name]; if not f then error('module not bundled: '..name) end"
   echo "  local m = f(name); if m == nil then m = true end; loaded[name] = m; return m"
   echo "end"
-  for mod in leb int64 bit memory decoder wasi interp wasm; do
+  for mod in leb int64 bit memory decoder wasi interp wasm sql; do
     echo "preload['$mod'] = function(...)"
     cat "src/$mod.lua"
     echo "end"
@@ -39,7 +39,7 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, set_yield = wasm.set_yield }
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield }
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a
@@ -70,6 +70,39 @@ end
 
 function wasmcraft.run_file(path, args)
   return wasmcraft.run_wasi(read_bytes(path), args or { path })
+end
+
+-- A host filesystem backed by CC's fs API (for sql persistence in-game).
+local function cc_hostfs(root)
+  root = root or ""
+  local function full(p)
+    if p:sub(1, 1) == "/" then p = p:sub(2) end
+    return root == "" and p or fs.combine(root, p)
+  end
+  return {
+    read = function(p) p = full(p); if not fs.exists(p) then return nil end local h = fs.open(p, "rb"); local d = h.readAll(); h.close(); return d end,
+    write = function(p, d) p = full(p); local h = fs.open(p, "wb"); h.write(d); h.close() end,
+    exists = function(p) return fs.exists(full(p)) end,
+    size = function(p) p = full(p); if not fs.exists(p) then return nil end return fs.getSize(p) end,
+    unlink = function(p) p = full(p); if fs.exists(p) then fs.delete(p) end end,
+    mkdir = function(p) fs.makeDir(full(p)) end,
+  }
+end
+
+-- Pick a filesystem backend appropriate to the host VM (CC fs, else Lua io).
+function wasmcraft.hostfs(root)
+  if type(fs) == "table" and fs.open then return cc_hostfs(root) end
+  return nil -- sql.open builds a Lua io backend from `root`
+end
+
+-- Open a SQLite database with the generic query API and file persistence.
+--   opts: { modulePath = "wq.wasm" | module = <bytes>, path = "my.db", root = "" }
+function wasmcraft.opendb(opts)
+  local module = opts.module or read_bytes(opts.modulePath or "wq.wasm")
+  return wasmcraft.sql.open({
+    module = module, path = opts.path,
+    fs = opts.fs or wasmcraft.hostfs(opts.root), root = opts.root,
+  })
 end
 
 -- auto-run when invoked as a CC/Cobalt program with a filename argument

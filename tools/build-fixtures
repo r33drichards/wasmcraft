@@ -26,11 +26,15 @@ build() {
   echo "== compiling C fixtures =="
   zig cc -target wasm32-wasi -Os -o wasm/hello.wasm   csrc/hello.c
   zig cc -target wasm32-wasi -Os -o wasm/compute.wasm csrc/compute.c
-  echo "== compiling SQLite (takes ~15s) =="
-  zig cc -target wasm32-wasi -O2 \
-    -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 \
-    -DSQLITE_DQS=0 -DSQLITE_TEMP_STORE=3 -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_WAL \
-    -o wasm/sqlite.wasm csrc/sqlite_demo.c csrc/sqlite3.c
+  local SQLITE_FLAGS="-DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
+    -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_WAL -DSQLITE_TEMP_STORE=3"
+  echo "== compiling SQLite demo command module (~15s) =="
+  zig cc -target wasm32-wasi -O2 $SQLITE_FLAGS -o wasm/sqlite.wasm csrc/sqlite_demo.c csrc/sqlite3.c
+  echo "== compiling size-optimized SQLite demo =="
+  zig cc -target wasm32-wasi -Oz $SQLITE_FLAGS -o wasm/sqlite-min.wasm csrc/sqlite_demo.c csrc/sqlite3.c
+  echo "== compiling wq reactor (generic query API + WASI file persistence) =="
+  zig cc -target wasm32-wasi -mexec-model=reactor -Oz $SQLITE_FLAGS -Wl,--export-memory \
+    -o wasm/wq.wasm csrc/wq.c csrc/sqlite3.c
   echo "== done =="; ls -la wasm/
 }
 
