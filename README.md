@@ -90,11 +90,19 @@ wasmcraft hello.wasm
 Other prebuilt modules: `wc-add.wasm` (exports `add`), `wc-compute.wasm`
 (malloc + qsort). The bundle reads the `.wasm` via CC's `fs` API.
 
-**SQLite in-game** is heavier: the 4.4 MB module exceeds a default computer's
-1 MB disk *and* CC's "too long without yielding" budget. To try it, raise
-`computer_space_limit` in the CC:Tweaked config and copy `wasm/sqlite.wasm`
-straight into the computer's save folder
-(`saves/<world>/computercraft/computer/<id>/`), then `wasmcraft sqlite.wasm`.
+**SQLite in-game** works on a stock computer. A size-optimized build
+(`wasm/sqlite-min.wasm`, ~723 KB via `-Oz` + feature omits) fits the default
+1 MB disk alongside the bundle, and the interpreter yields to CC's event loop
+every 200k instructions so it doesn't trip the "too long without yielding"
+watchdog:
+
+```
+wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
+wget https://paste-production.up.railway.app/wc-sqlite.wasm sqlite.wasm
+wasmcraft sqlite.wasm
+```
+→ runs `CREATE`/`INSERT`/`SELECT`/aggregate, takes a few seconds. (The full
+4.4 MB `-O2` build, `wasm/sqlite.wasm`, needs a raised `computer_space_limit`.)
 
 ## Coverage (honest scope)
 

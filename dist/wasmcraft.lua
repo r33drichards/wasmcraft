@@ -1014,6 +1014,17 @@ local function to_s32(x)
 end
 M.to_u32, M.to_s32 = to_u32, to_s32
 
+-- Cooperative yielding: heavy modules (e.g. SQLite) would otherwise run for
+-- seconds and trip CC:Tweaked's "too long without yielding" watchdog. A host can
+-- register a hook that is called every `yield_every` instructions.
+local yield_hook = nil
+local yield_every = 100000
+local ycount = 0
+function M.set_yield(fn, every)
+  yield_hook = fn
+  if every then yield_every = every end
+end
+
 local function clz32(x) if x == 0 then return 32 end local n = 0; while x < 0x80000000 do x = x * 2; n = n + 1 end return n end
 local function ctz32(x) if x == 0 then return 32 end local n = 0; while x % 2 == 0 do x = x / 2; n = n + 1 end return n end
 local function popcnt32(x) local n = 0; while x > 0 do n = n + (x % 2); x = floor(x / 2) end return n end
@@ -1114,6 +1125,10 @@ run = function(inst, funcIdx, args)
 
   local pc = 1
   while pc <= n do
+    if yield_hook then
+      ycount = ycount + 1
+      if ycount >= yield_every then ycount = 0; yield_hook() end
+    end
     local ins = body[pc]
     local op = ins.op
     local nextpc = pc + 1
@@ -1506,6 +1521,9 @@ function M.instantiate(module, imports)
   return interp.instantiate(module, imports)
 end
 
+-- Register a yield hook called every `every` instructions (for CC's watchdog).
+M.set_yield = interp.set_yield
+
 return M
 end
 preload['bit_native'] = function(...)
@@ -1563,7 +1581,14 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi }
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, set_yield = wasm.set_yield }
+
+-- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
+-- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a
+-- private event resets the timer and resumes in the same tick.
+if type(os) == "table" and os.queueEvent and os.pullEvent then
+  wasm.set_yield(function() os.queueEvent("wasmcraft_yield"); os.pullEvent("wasmcraft_yield") end, 200000)
+end
 
 -- read a file's bytes via CC fs (binary) or standard io
 local function read_bytes(path)
