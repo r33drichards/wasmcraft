@@ -57,8 +57,9 @@ if a[2] == "-i" then
   while true do
     write(label .. "> ")
     local line = read()
-    if line == "exit" or line == "quit" or line == "halt." then break end
-    if line == "reset." or line == "reset" then
+    -- shell commands are bare words; anything in Picat syntax goes to Picat
+    if line == "exit" or line == "quit" then break end
+    if line == "reset" then
       local r = ask({ action = "reset" })
       print(r and r.output or "(timeout)")
     elseif line ~= "" then
