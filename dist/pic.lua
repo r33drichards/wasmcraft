@@ -21,10 +21,23 @@ if not opened then print("pic: no modem attached."); return end
 local id = rednet.lookup(PROTO, name)
 if not id then print("pic: no picatd named '" .. name .. "' found on the network."); return end
 
+local reqn = 0
 local function ask(m, timeout)
+  reqn = reqn + 1
+  m.id = tostring(os.getComputerID and os.getComputerID() or 0) .. ":" .. reqn .. ":" ..
+    tostring(os.epoch and os.epoch("utc") or os.clock())
   rednet.send(id, m, PROTO)
-  local _, r = rednet.receive(PROTO, timeout or 180)
-  return r
+  local deadline = os.clock() + (timeout or 300)
+  while os.clock() < deadline do
+    local _, r = rednet.receive(PROTO, deadline - os.clock())
+    if type(r) == "table" and (r.id == m.id or r.id == nil) then
+      if r.status == "queued" then
+        print("(daemon busy — queued at position " .. tostring(r.position) .. ")")
+      else
+        return r
+      end
+    end
+  end
 end
 
 -- interactive shell: a remote Picat> prompt served by the warm daemon
@@ -34,7 +47,7 @@ if a[2] == "-i" then
     write("Picat> ")
     local line = read()
     if line == "exit" or line == "quit" or line == "halt." then break end
-    if line == "reset." then
+    if line == "reset." or line == "reset" then
       local r = ask({ action = "reset" })
       print(r and r.output or "(timeout)")
     elseif line ~= "" then

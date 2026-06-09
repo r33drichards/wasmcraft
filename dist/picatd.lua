@@ -79,10 +79,57 @@ local function handle(msg)
   return { ok = false, output = "unknown action: " .. tostring(msg.action) }
 end
 
-while true do
-  local sender, msg = rednet.receive(PROTO)
-  local reply = handle(msg)
+local function respond(sender, reply, id)
+  reply.id = id
   rednet.send(sender, reply, PROTO)
-  print(("%s from %s -> %s"):format(type(msg) == "table" and tostring(msg.action) or "?",
-    tostring(sender), reply.ok and "ok" or "err"))
+end
+
+-- Concurrent clients: a receiver coroutine accepts requests while a worker runs
+-- the (single) Picat engine. The compiled engine yields to the event loop at
+-- loop back-edges, so the receiver stays responsive during long runs: pings are
+-- answered instantly and queued jobs get an immediate ACK with their position.
+-- Requests carry an id; replies echo it so clients match them up.
+local queue, busy = {}, false
+
+local function receiver()
+  while true do
+    local sender, msg = rednet.receive(PROTO)
+    if type(msg) == "table" and msg.action == "ping" then
+      respond(sender, { ok = true, output = name }, msg.id)
+    elseif type(msg) == "table" then
+      queue[#queue + 1] = { sender = sender, msg = msg }
+      if busy or #queue > 1 then
+        respond(sender, { ok = true, status = "queued", position = #queue }, msg.id)
+      end
+      os.queueEvent("wcpicat_work")
+    else
+      respond(sender, { ok = false, output = "bad request" }, nil)
+    end
+  end
+end
+
+local function worker()
+  while true do
+    if #queue == 0 then
+      os.pullEvent("wcpicat_work")
+    else
+      local job = table.remove(queue, 1)
+      busy = true
+      local reply = handle(job.msg)
+      busy = false
+      respond(job.sender, reply, job.msg.id)
+      print(("%s from %s -> %s%s"):format(tostring(job.msg.action), tostring(job.sender),
+        reply.ok and "ok" or "err", #queue > 0 and (" (" .. #queue .. " queued)") or ""))
+    end
+  end
+end
+
+if parallel then
+  parallel.waitForAll(receiver, worker)
+else -- non-CC fallback: serial serve loop
+  while true do
+    local sender, msg = rednet.receive(PROTO)
+    local reply = handle(msg)
+    respond(sender, reply, type(msg) == "table" and msg.id or nil)
+  end
 end
