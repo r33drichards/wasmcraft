@@ -107,7 +107,7 @@ local function bt_arity(mod, bt)
   return #bt.params, #bt.results
 end
 
-function M.compile_func(mod, fidx)
+local function build_fb(mod, fidx)
   local ftype = mod.types[mod.funcTypeIdx[fidx] + 1]
   local code = mod.codes[fidx]
   local nparams = #ftype.params
@@ -254,7 +254,7 @@ function M.compile_func(mod, fidx)
       ctrl[#ctrl + 1] = fr
     elseif op == "else" then do_else()
     elseif op == "end" then do_end()
-    elseif op == "br" then branch_to(ctrl[#ctrl - ins.label]); go_dead()
+    elseif op == "br" then branch_to(ctrl[#ctrl - ins.label]); fb:anchor(); go_dead()
     elseif op == "br_if" then
       vsp = vsp - 1; local cond = base + vsp
       local fr = ctrl[#ctrl - ins.label]
@@ -279,12 +279,12 @@ function M.compile_func(mod, fidx)
       end
       local frd = ctrl[#ctrl - ins.default]
       vsp = vsp + 1; branch_to(frd); vsp = vsp - 1
-      go_dead()
+      fb:anchor(); go_dead()
     elseif op == "return" then
       if nres == 0 then fb:RETURN(0, 1) else fb:RETURN(base + vsp - nres, nres + 1) end
-      go_dead()
+      fb:anchor(); go_dead()
     elseif op == "unreachable" then
-      local f = base + vsp; fb:GETTABLE(f, renv, kop(fb:kstr("__unreachable"))); fb:CALL(f, 1, 1); go_dead()
+      local f = base + vsp; fb:GETTABLE(f, renv, kop(fb:kstr("__unreachable"))); fb:CALL(f, 1, 1); fb:anchor(); go_dead()
     elseif op == "call" then
       local ct = functype_of(mod, ins.func)
       local na = #ct.params; local nr = #ct.results
@@ -315,7 +315,19 @@ function M.compile_func(mod, fidx)
     if nres == 0 then fb:RETURN(0, 1) else fb:RETURN(base + vsp - nres, nres + 1) end
   end
   fb:RETURN(0, 1)
-  return luabc.loadable(fb)
+  return fb
+end
+
+-- Compile one wasm function to a single Lua function (fast path). Errors via
+-- fb:build() if any jump exceeds Lua's 18-bit sBx range.
+function M.compile_func(mod, fidx)
+  return luabc.loadable(build_fb(mod, fidx))
+end
+
+-- Same as compile_func but relaxes too-far jumps through trampolines, so it can
+-- compile functions that overflow Lua's jump range. Same return contract.
+function M.compile_oversized(mod, fidx)
+  return luabc.loadable_relaxed(build_fb(mod, fidx))
 end
 
 -- ---- instantiation: compile every function, wire the instance --------------
@@ -379,8 +391,18 @@ function M.instantiate(module, imports)
     local gi = module.numImportedFuncs + (j - 1)
     iinst.functions[gi] = delegate(gi)
     inst.funcs[gi] = function(...)
-      local ok, fn = pcall(function() return loader(M.compile_func(module, j), "wasmfn#" .. gi)(ENV) end)
-      if ok then
+      local function via(compile) return loader(compile(module, j), "wasmfn#" .. gi)(ENV) end
+      local fn
+      if M._force_oversized then
+        local ok, f = pcall(via, M.compile_oversized); if ok then fn = f end
+      else
+        local ok, f = pcall(via, M.compile_func)
+        if ok then fn = f else
+          -- too large for a single Lua function: relax jumps via trampolines
+          local ok2, f2 = pcall(via, M.compile_oversized); if ok2 then fn = f2 end
+        end
+      end
+      if fn then
         inst.funcs[gi] = fn
       else
         inst.fallbacks[gi] = true

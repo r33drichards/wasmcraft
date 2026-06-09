@@ -37,9 +37,15 @@ function M.func(nparams, nups)
   return setmetatable({
     nparams = nparams, nups = nups or 0,
     code = {}, consts = {}, kmap = {}, children = {},
-    maxstack = nparams, jumps = {},
+    maxstack = nparams, jumps = {}, anchors = {},
   }, FB)
 end
+
+-- Mark a trampoline-insertion point: the position right AFTER an unconditional
+-- control transfer (br/br_table/return/unreachable). Code there is never reached
+-- by fall-through, so build_relaxed() may splice trampoline JMPs in. No-op for
+-- the normal (single-function) build path.
+function FB:anchor() self.anchors[#self.anchors + 1] = #self.code + 1 end
 
 function FB:use(r) if r + 1 > self.maxstack then self.maxstack = r + 1 end end
 -- track a register operand that may be an RK-encoded constant (>=256 -> ignore)
@@ -105,6 +111,174 @@ function FB:build()
   p[#p + 1] = u32(#self.children); for _, ch in ipairs(self.children) do p[#p + 1] = ch end
   p[#p + 1] = u32(0); p[#p + 1] = u32(0); p[#p + 1] = u32(0) -- lineInfo, locals, upvalNames
   return table.concat(p)
+end
+
+-- ---- branch relaxation (trampolines) ------------------------------------
+-- For functions whose jumps exceed Lua's 18-bit sBx range, reroute the too-far
+-- jumps through trampoline JMPs spliced into dead-code anchor slots. Positions
+-- shift as trampolines are inserted, so we iterate to a fixed point. The result
+-- is the same proto as build(), only with relaxed jumps; semantics identical.
+function FB:build_relaxed()
+  local code = self.code
+  local N = #code
+  local MAX = M.RELAX_MAX or 130000 -- safe jump magnitude (limit 131071; margin)
+
+  -- jumps[].pos = original index of a JMP word; jumps[].label.target = original
+  -- index it targets. Map pos -> jump record for fast lookup during emission.
+  local jumpByPos = {}
+  for _, j in ipairs(self.jumps) do
+    assert(j.label.target, "unresolved jump label")
+    jumpByPos[j.pos] = j
+  end
+
+  -- anchors: original positions (ascending) where trampolines may be inserted
+  -- (just before the original instruction at that index).
+  local anchors = self.anchors
+  local nanch = #anchors
+
+  -- per-anchor trampoline bookkeeping
+  local counts = {}                 -- counts[k] = #trampolines at anchor k
+  local trampAt = {}                -- trampAt[k][labelobj] = tramp record
+  local perAnchorTramps = {}        -- perAnchorTramps[k] = ordered list
+  local allTramps = {}              -- all tramp records (creation order)
+  for k = 1, nanch do counts[k] = 0; trampAt[k] = {}; perAnchorTramps[k] = {} end
+
+  local cumc = {}                   -- cumc[k] = sum counts[1..k]; cumc[0]=0
+  local effArr = {}                 -- effArr[k] = position of anchor k's first slot
+  local function recompute()
+    local s = 0; cumc[0] = 0
+    for k = 1, nanch do s = s + counts[k]; cumc[k] = s; effArr[k] = anchors[k] + cumc[k - 1] end
+  end
+
+  -- number of anchors with anchors[k] <= t  (anchors ascending)
+  local function anchors_le(t)
+    if nanch == 0 or anchors[1] > t then return 0 end
+    local l, r, res = 1, nanch, 0
+    while l <= r do
+      local mid = math.floor((l + r) / 2)
+      if anchors[mid] <= t then res = mid; l = mid + 1 else r = mid - 1 end
+    end
+    return res
+  end
+  local function newpos(t) return t + cumc[anchors_le(t)] end
+  local function trampPos(rec) return anchors[rec.k] + cumc[rec.k - 1] + rec.j end
+  local function tpos(T)
+    if T.label then return newpos(T.label.target) else return trampPos(T.tramp) end
+  end
+
+  -- choose an anchor (effArr ascending in k) toward target position q
+  local added
+  local function choose_anchor(srcpos, q)
+    if q > srcpos then
+      local hi = q - 1; if srcpos + MAX < hi then hi = srcpos + MAX end
+      -- largest k with effArr[k] <= hi and effArr[k] > srcpos
+      local l, r, res = 1, nanch, nil
+      while l <= r do
+        local mid = math.floor((l + r) / 2)
+        if effArr[mid] <= hi then res = mid; l = mid + 1 else r = mid - 1 end
+      end
+      if res and effArr[res] > srcpos then return res end
+      return nil
+    else
+      local lo = q + 1; if srcpos - MAX > lo then lo = srcpos - MAX end
+      -- smallest k with effArr[k] >= lo and effArr[k] < srcpos
+      local l, r, res = 1, nanch, nil
+      while l <= r do
+        local mid = math.floor((l + r) / 2)
+        if effArr[mid] >= lo then res = mid; r = mid - 1 else l = mid + 1 end
+      end
+      if res and effArr[res] < srcpos then return res end
+      return nil
+    end
+  end
+
+  -- immediate target for a jump at srcpos whose ultimate destination is finalT
+  -- ({label=L}); returns an in-range target object, creating trampolines as
+  -- needed (memoized per (anchor, label)).
+  local function route1(srcpos, finalT)
+    local q = newpos(finalT.label.target)
+    local d = q - srcpos - 1
+    if d >= -MAX and d <= MAX then return finalT end
+    local k = choose_anchor(srcpos, q)
+    if not k then error("relax: no trampoline anchor in range") end
+    local L = finalT.label
+    local rec = trampAt[k][L]
+    if not rec then
+      counts[k] = counts[k] + 1
+      rec = { k = k, j = counts[k] - 1, finalT = finalT, imm = finalT }
+      trampAt[k][L] = rec
+      perAnchorTramps[k][#perAnchorTramps[k] + 1] = rec
+      allTramps[#allTramps + 1] = rec
+      added = true
+    end
+    return { tramp = rec }
+  end
+
+  -- stickiness: keep an existing immediate target while it stays in range
+  local function ok_range(srcpos, imm)
+    local d = tpos(imm) - srcpos - 1
+    return d >= -MAX and d <= MAX
+  end
+
+  -- iterate to fixed point
+  for pass = 1, 500 do
+    recompute()
+    added = false
+    for _, j in ipairs(self.jumps) do
+      local srcpos = newpos(j.pos)
+      if not (j.imm and ok_range(srcpos, j.imm)) then
+        j.imm = route1(srcpos, { label = j.label })
+      end
+    end
+    for _, rec in ipairs(allTramps) do
+      local srcpos = trampPos(rec)
+      if not ok_range(srcpos, rec.imm) then
+        rec.imm = route1(srcpos, rec.finalT)
+      end
+    end
+    if not added then break end
+  end
+  recompute()
+
+  -- materialize the final code array, splicing trampolines at anchors
+  local function jmpword(sp, T)
+    local sbx = tpos(T) - sp - 1
+    if sbx > 131071 or sbx < -131071 then error("relax: jump still out of range") end
+    return iAsBx(OP.JMP, 0, sbx)
+  end
+  local out = {}
+  local ai = 1
+  local function flush_anchors_at(idx)
+    while ai <= nanch and anchors[ai] == idx do
+      for _, rec in ipairs(perAnchorTramps[ai]) do out[#out + 1] = jmpword(trampPos(rec), rec.imm) end
+      ai = ai + 1
+    end
+  end
+  for i = 1, N do
+    flush_anchors_at(i)
+    local j = jumpByPos[i]
+    if j then out[#out + 1] = jmpword(newpos(i), j.imm) else out[#out + 1] = code[i] end
+  end
+  flush_anchors_at(N + 1)
+
+  local p = { lstr(nil), u32(0), u32(0), u8(self.nups), u8(self.nparams), u8(0), u8(self.maxstack), u32(#out) }
+  for _, c in ipairs(out) do p[#p + 1] = c end
+  p[#p + 1] = u32(#self.consts); for _, k in ipairs(self.consts) do p[#p + 1] = k end
+  p[#p + 1] = u32(#self.children); for _, ch in ipairs(self.children) do p[#p + 1] = ch end
+  p[#p + 1] = u32(0); p[#p + 1] = u32(0); p[#p + 1] = u32(0)
+  return table.concat(p)
+end
+
+-- Like M.loadable but relaxes the wasm function's jumps via trampolines.
+function M.loadable_relaxed(wasmfn)
+  local child = wasmfn:build_relaxed()
+  local fac = M.func(1, 0)
+  local idx = fac:add_child(child)
+  fac:CLOSURE(1, idx)
+  fac:_emit(iABC(OP.MOVE, 0, 0, 0))
+  fac:RETURN(1, 2)
+  fac:RETURN(0, 1)
+  return HEADER .. fac:build()
 end
 
 -- Wrap a wasm-function builder (which uses exactly 1 upvalue = ENV) in a factory

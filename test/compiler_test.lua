@@ -5,6 +5,10 @@ local T = require("harness")
 local wasm = require("wasm")
 local decoder = require("decoder")
 local compiler = require("compiler")
+-- Route every function through the trampoline/branch-relaxation path so the
+-- differential test exercises compile_oversized. Set FORCE_OVERSIZED=0 to test
+-- the plain single-function path instead.
+compiler._force_oversized = os.getenv("FORCE_OVERSIZED") ~= "0"
 T.start("compiler")
 
 local function readwasm(name)
