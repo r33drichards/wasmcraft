@@ -50,18 +50,25 @@ local function ask(m, timeout)
   end
 end
 
--- interactive shell: a remote prompt against this session's warm engine
+-- interactive shell: a remote prompt against this session's warm engine.
+-- Admin commands start with "." (like sqlsh) — a leading dot is never valid
+-- Picat, so there's no ambiguity. Everything else goes to Picat verbatim.
 if a[2] == "-i" then
   local label = (session or "main") .. "@" .. name
-  print("pic: shell on " .. label .. " — 'reset' resets this session, 'exit' quits.")
+  print("pic: shell on " .. label .. "   (.help for admin commands)")
   while true do
     write(label .. "> ")
     local line = read()
-    -- shell commands are bare words; anything in Picat syntax goes to Picat
-    if line == "exit" or line == "quit" then break end
-    if line == "reset" then
+    if line == ".exit" or line == ".quit" then break end
+    if line == ".help" then
+      print(".reset  reset this session to a fresh engine")
+      print(".exit   leave the shell (daemon keeps running)")
+      print("anything else is sent to Picat, e.g.  X = 2 + 3, println(X).")
+    elseif line == ".reset" then
       local r = ask({ action = "reset" })
       print(r and r.output or "(timeout)")
+    elseif line:sub(1, 1) == "." then
+      print("unknown admin command '" .. line .. "' — try .help")
     elseif line ~= "" then
       local r = ask({ action = "query", goal = line })
       if not r then print("(timeout — daemon busy or gone)")
