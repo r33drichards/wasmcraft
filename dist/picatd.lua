@@ -21,7 +21,21 @@ end
 local function find(c) for _, p in ipairs(c) do local f = io.open(p, "rb"); if f then f:close(); return p end end end
 
 ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
-local picat = assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
+local function load_lib()
+  return assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
+end
+local picat = load_lib()
+-- self-heal: ensure() keeps pre-existing files, so an old picat.lua/wasmcraft
+-- (without session support) may have been loaded. Refresh both and reload.
+if not picat.session and type(fs) == "table" then
+  print("picatd: picat.lua/wasmcraft out of date - refreshing...")
+  for f, u in pairs({ ["picat.lua"] = PICATLIB_URL, ["wasmcraft"] = BUNDLE_URL }) do
+    if fs.exists(f) then fs.delete(f) end
+    ensure(f, u)
+  end
+  picat = load_lib()
+end
+assert(picat.session, "picat.lua still lacks session() after refresh")
 picat.modulePath = find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
   "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" }) or "disk/picat.wasm"
 
