@@ -96,12 +96,19 @@ function wasmcraft.hostfs(root)
 end
 
 -- Open a SQLite database with the generic query API and file persistence.
---   opts: { modulePath = "wq.wasm" | module = <bytes>, path = "my.db", root = "" }
+--   opts: { modulePath = "wq.wasm" | module = <bytes>, path = "dir/my.db", root = "" }
+-- A slash-containing path is split into a directory (used as the fs root) and a
+-- bare filename handed to SQLite, so absolute/nested paths just work.
 function wasmcraft.opendb(opts)
   local module = opts.module or read_bytes(opts.modulePath or "wq.wasm")
+  local path, root = opts.path, opts.root
+  if path and not root then
+    local d, n = path:match("^(.*)/([^/]+)$")
+    if d then root, path = (d == "" and "/" or d), n end
+  end
   return wasmcraft.sql.open({
-    module = module, path = opts.path,
-    fs = opts.fs or wasmcraft.hostfs(opts.root), root = opts.root,
+    module = module, path = path,
+    fs = opts.fs or wasmcraft.hostfs(root), root = root,
   })
 end
 
