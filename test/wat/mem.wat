@@ -1,0 +1,20 @@
+(module
+ (memory (export "mem") 1)
+ (func (export "sum") (param $n i32) (result i32)
+   (local $i i32) (local $acc i32)
+   (block $wd (loop $w
+     (br_if $wd (i32.ge_s (local.get $i) (local.get $n)))
+     (i32.store (i32.mul (local.get $i) (i32.const 4)) (i32.mul (local.get $i)(local.get $i)))
+     (local.set $i (i32.add (local.get $i)(i32.const 1)))
+     (br $w)))
+   (local.set $i (i32.const 0))
+   (block $rd (loop $r
+     (br_if $rd (i32.ge_s (local.get $i)(local.get $n)))
+     (local.set $acc (i32.add (local.get $acc)(i32.load (i32.mul (local.get $i)(i32.const 4)))))
+     (local.set $i (i32.add (local.get $i)(i32.const 1)))
+     (br $r)))
+   (local.get $acc))
+ (func (export "bytes") (result i32)
+   (i32.store8 (i32.const 100) (i32.const 0x41))
+   (i32.store16 (i32.const 101) (i32.const 0xBEEF))
+   (i32.add (i32.load8_u (i32.const 100)) (i32.load16_u (i32.const 101)))))
