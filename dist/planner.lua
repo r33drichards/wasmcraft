@@ -40,10 +40,19 @@ local function daemon_solve()
   if type(peripheral) ~= "table" or not peripheral.find or not rednet then return nil end
   local opened = false
   peripheral.find("modem", function(n) rednet.open(n); opened = true end)
-  if not opened then return nil end
+  if not opened then
+    print("(no modem attached - can't reach a picatd daemon)")
+    return nil
+  end
+  -- a daemon that is mid-boot answers lookups slowly (it only processes events
+  -- between engine yields), so a single 2s lookup can miss it: retry a few times
   local id
-  if args[1] then id = rednet.lookup(PROTO, args[1])
-  else local hosts = { rednet.lookup(PROTO) }; id = hosts[1] end
+  for attempt = 1, 4 do
+    if args[1] then id = rednet.lookup(PROTO, args[1])
+    else local hosts = { rednet.lookup(PROTO) }; id = hosts[1] end
+    if id then break end
+    print("(no picatd answered lookup " .. attempt .. "/4 - daemon may still be booting)")
+  end
   if not id then return nil end
   print("solving on picatd #" .. id .. " (session 'planner')...")
   local mid = "planner:" .. tostring(os.getComputerID and os.getComputerID() or 0) ..

@@ -27,7 +27,12 @@ if type(peripheral) == "table" and peripheral.find then
 end
 if not opened then print("pic: no modem attached."); return end
 
-local id = rednet.lookup(PROTO, name)
+local id
+for attempt = 1, 4 do
+  id = rednet.lookup(PROTO, name)
+  if id then break end
+  if attempt < 4 then print("pic: no answer from '" .. name .. "' (try " .. attempt .. "/4 - booting daemons answer slowly)") end
+end
 if not id then print("pic: no picatd named '" .. name .. "' found on the network."); return end
 
 local reqn = 0
