@@ -1,0 +1,30 @@
+import planner.
+import util.
+main =>
+  Origin = {0,0},
+  Goals  = [{4,4},{4,0}],                 % order-free: planner picks the cheaper order
+  Walls  = [{2,1},{2,2},{2,3}],           % obstacle to route around
+  best_plan({Origin,Goals,Walls}, Plan),  % OPTIMAL plan (cost-minimizing)
+  printf("BOUNDS 4 4\n"),
+  printf("START %w %w\n", Origin[1], Origin[2]),
+  foreach({Gx,Gy} in Goals) printf("GOAL %w %w\n", Gx, Gy) end,
+  foreach({Wx,Wy} in Walls) printf("WALL %w %w\n", Wx, Wy) end,
+  printf("PATH %w %w\n", Origin[1], Origin[2]),
+  walk(Origin, Plan).
+final({_Pos,Goals,_}) => Goals = [].
+action(From,To,Action,Cost) ?=>
+  From = {{Fx,Fy},Goals,Walls},
+  member({Dx,Dy},[{-1,0},{1,0},{0,-1},{0,1}]),
+  Tx=Fx+Dx, Ty=Fy+Dy,
+  member(Tx,0..4), member(Ty,0..4),
+  not member({Tx,Ty}, Walls),
+  To = {{Tx,Ty},Goals,Walls},
+  Action={move,{Tx,Ty}}, Cost=1.
+action(From,To,Action,Cost) ?=>
+  From = {Pos,Goals,Walls},
+  member(Pos,Goals),
+  To = {Pos, delete(Goals,Pos), Walls},
+  Action={mark,Pos}, Cost=1.
+walk(_, []) => true.
+walk(_P,[{move,{Tx,Ty}}|R]) => printf("PATH %w %w\n", Tx, Ty), walk({Tx,Ty}, R).
+walk(P,[{mark,_}|R]) => walk(P, R).
