@@ -72,6 +72,30 @@ across LEB128, i32/i64/float ops & conversions, structured control, memory,
 `call`/`call_indirect`, WASI, and SQLite. Compiled C fixtures (`hello.c`,
 `compute.c` with malloc+qsort) and SQLite are produced with `zig cc -target wasm32-wasi`.
 
+## Running in-game (CC:Tweaked / real Cobalt)
+
+`tools/amalgamate` bundles the whole interpreter into one file, `dist/wasmcraft.lua`,
+with no `require`/`package.path` — drop it on a ComputerCraft computer and go.
+Requires **CC:Tweaked 1.100+** (for `string.pack`); `bit32` is built in.
+
+On an in-game Computer's terminal (HTTP is on by default):
+
+```
+wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
+wget https://paste-production.up.railway.app/wc-hello.wasm hello.wasm
+wasmcraft hello.wasm
+```
+→ `hello from wasm in cobalt; sum(1..100)=5050; len=25`
+
+Other prebuilt modules: `wc-add.wasm` (exports `add`), `wc-compute.wasm`
+(malloc + qsort). The bundle reads the `.wasm` via CC's `fs` API.
+
+**SQLite in-game** is heavier: the 4.4 MB module exceeds a default computer's
+1 MB disk *and* CC's "too long without yielding" budget. To try it, raise
+`computer_space_limit` in the CC:Tweaked config and copy `wasm/sqlite.wasm`
+straight into the computer's save folder
+(`saves/<world>/computercraft/computer/<id>/`), then `wasmcraft sqlite.wasm`.
+
 ## Coverage (honest scope)
 
 Implements the slice of the WASM spec that real LLVM/clang C output uses:
