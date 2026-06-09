@@ -1620,3 +1620,6 @@ if _a[1] then
   local code = wasmcraft.run_file(_a[1], _a)
   if code ~= 0 then print("[module exited with code "..tostring(code).."]") end
 end
+
+-- when loaded as a library (loadfile("wasmcraft")()), hand back the API table
+return wasmcraft
