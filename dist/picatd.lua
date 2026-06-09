@@ -43,7 +43,19 @@ assert(picat.session, "picat.lua still lacks session() after refresh")
 picat.modulePath = find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
   "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" }) or "disk/picat.wasm"
 
-local name = ({ ... })[1]
+local args = { ... }
+-- picatd --install [name]: run on every boot via startup.lua. A daemon computer
+-- reboots when its chunk unloads or the server restarts, which kills the daemon
+-- and drops its rednet hostname; installing makes it come back by itself.
+if args[1] == "--install" and type(fs) == "table" then
+  local h = fs.open("startup.lua", "w")
+  h.write('shell.run("picatd"' .. (args[2] and (', "' .. args[2] .. '"') or "") .. ')\n')
+  h.close()
+  print("picatd: installed to startup.lua — will start on every boot.")
+  print("picatd: starting now...")
+  table.remove(args, 1)
+end
+local name = args[1]
 if not name and os and os.getComputerLabel then name = os.getComputerLabel() end
 name = name or "picat"
 
