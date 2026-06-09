@@ -5,7 +5,10 @@
 --   pic <name> [-n sess] -e "Goal."   run a raw Picat goal/query
 --   pic <name> [-n sess] -i           interactive shell (remote Picat> prompt)
 --   pic <name> [-n sess] --reset      reset that session to a fresh engine
+--   pic <name> --jobs                 live daemon status: sessions, jobs, queues
+--   pic <name> [-n sess] --cancel     cancel that session's jobs (kills running)
 --   pic <name> [-n sess]              type a program; end with a "." line
+-- Works great on a wireless pocket computer as a remote control.
 -- -n names YOUR session on the daemon: each named session is its own isolated
 -- Picat engine with its own queue, served concurrently with other sessions.
 -- Without -n you share the default "main" session.
@@ -91,7 +94,11 @@ if a[2] == "-i" then
 end
 
 local msg
-if a[2] == "--reset" then
+if a[2] == "--jobs" then
+  msg = { action = "status" }
+elseif a[2] == "--cancel" then
+  msg = { action = "cancel" }
+elseif a[2] == "--reset" then
   msg = { action = "reset" }
 elseif a[2] == "-e" then
   msg = { action = "query", goal = a[3] or "true." }

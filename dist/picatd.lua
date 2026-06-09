@@ -72,9 +72,23 @@ end
 -- against each other instead of head-of-line blocking. Within a session,
 -- requests run in order. The shared chunk cache means extra sessions boot
 -- without re-compiling any wasm functions (they only re-execute the bootstrap).
-local sessions = {} -- sname -> { queue = {jobs}, s = engine|nil, busy = bool }
+local sessions = {} -- sname -> { queue, s = engine|nil, busy, state, current, done, task }
 local tasks = {}    -- scheduler coroutines
-local function spawn(fn) tasks[#tasks + 1] = { co = coroutine.create(fn) } end
+local started_at = os.clock()
+local total_jobs = 0
+local function spawn(fn)
+  local t = { co = coroutine.create(fn) }
+  tasks[#tasks + 1] = t
+  return t
+end
+
+-- log to the terminal AND a ring buffer the monitor dashboard shows
+local LOG, LOGMAX = {}, 40
+local function dlog(msg)
+  print(msg)
+  LOG[#LOG + 1] = msg
+  if #LOG > LOGMAX then table.remove(LOG, 1) end
+end
 
 local function respond(sender, reply, id)
   reply.id = id
@@ -99,25 +113,35 @@ local function worker(sname, sess)
   return function()
     while true do
       if #sess.queue == 0 then
+        sess.state = sess.s and "idle" or "empty"
         os.pullEvent("wcpicat_work")
       else
         local job = table.remove(sess.queue, 1)
         if not sess.s then
-          print("picatd: booting session '" .. sname .. "'...")
+          sess.state = "booting"
+          dlog("picatd: booting session '" .. sname .. "'...")
           sess.s = picat.session({ root = "." })
-          print("picatd: session '" .. sname .. "' ready.")
+          dlog("picatd: session '" .. sname .. "' ready.")
         end
         if job.sender then
-          print(("[%s] %s from %s started"):format(sname, tostring(job.msg.action), tostring(job.sender)))
+          dlog(("[%s] %s from %s started"):format(sname, tostring(job.msg.action), tostring(job.sender)))
         end
         sess.busy = true
+        sess.state = "busy"
+        sess.current = { action = job.msg.action, sender = job.sender, id = job.msg.id, started = os.clock() }
         local reply = handle(sess, job.msg, sname)
+        local took = os.clock() - sess.current.started
         sess.busy = false
+        sess.current = nil
+        sess.done = (sess.done or 0) + 1
+        total_jobs = total_jobs + 1
         respond(job.sender, reply, job.msg.id)
         if job.sender then
-          print(("[%s] %s from %s -> %s%s"):format(sname, tostring(job.msg.action),
-            tostring(job.sender), reply.ok and "ok" or "err",
+          dlog(("[%s] %s from %s -> %s in %ds%s"):format(sname, tostring(job.msg.action),
+            tostring(job.sender), reply.ok and "ok" or "err", took,
             #sess.queue > 0 and (" (" .. #sess.queue .. " queued)") or ""))
+        else
+          dlog(("picatd: session '%s' warmed (%ds) - ready."):format(sname, took))
         end
       end
     end
@@ -127,31 +151,86 @@ end
 local function getsession(sname)
   local sess = sessions[sname]
   if not sess then
-    sess = { queue = {}, busy = false }
+    sess = { queue = {}, busy = false, state = "empty", done = 0 }
     sessions[sname] = sess
-    spawn(worker(sname, sess))
+    sess.task = spawn(worker(sname, sess))
   end
   return sess
+end
+
+-- Cancel everything on a session. A RUNNING job can't be interrupted
+-- mid-instruction, so we abandon the session's worker coroutine (the engine
+-- with it) and respawn fresh: the job dies, the session's Picat state is lost,
+-- and the next job boots a new engine (fast-ish via the shared chunk cache).
+local function cancel_session(sname, why)
+  local sess = sessions[sname]
+  if not sess then return false, "no session '" .. tostring(sname) .. "'" end
+  local n = 0
+  for i = #sess.queue, 1, -1 do
+    local j = table.remove(sess.queue, i)
+    respond(j.sender, { ok = false, output = "cancelled (" .. why .. ")" }, j.msg.id)
+    n = n + 1
+  end
+  local had_running = sess.busy and sess.current
+  if had_running then
+    respond(sess.current.sender, { ok = false, output = "cancelled (" .. why .. ")" }, sess.current.id)
+    n = n + 1
+  end
+  if sess.task then sess.task.dead = true end
+  sess.s, sess.busy, sess.current, sess.state = nil, false, nil, "empty"
+  sess.task = spawn(worker(sname, sess))
+  dlog(("[%s] CANCELLED %d job(s) via %s%s"):format(sname, n, why,
+    had_running and " (engine reset - session state lost)" or ""))
+  return true, ("cancelled %d job(s) on '%s'"):format(n, sname)
+end
+
+-- one-line status per session (used by the dashboard and pic --jobs)
+local function status_lines()
+  local lines = {}
+  local names = {}
+  for sn in pairs(sessions) do names[#names + 1] = sn end
+  table.sort(names)
+  for _, sn in ipairs(names) do
+    local s = sessions[sn]
+    local d = s.state or "?"
+    if s.state == "busy" and s.current then
+      d = ("busy %ds on %s from %s"):format(os.clock() - s.current.started,
+        tostring(s.current.action), tostring(s.current.sender))
+    end
+    lines[#lines + 1] = ("%s: %s | %d done | %d queued"):format(sn, d, s.done or 0, #s.queue)
+  end
+  return lines
 end
 
 local function receiver()
   while true do
     local sender, msg = rednet.receive(PROTO)
-    if type(msg) == "table" and msg.action == "ping" then
+    if type(msg) ~= "table" then
+      respond(sender, { ok = false, output = "bad request" }, nil)
+    elseif msg.action == "ping" then
       local names = {}
       for sn in pairs(sessions) do names[#names + 1] = sn end
       respond(sender, { ok = true, output = name .. " sessions: " .. table.concat(names, ",") }, msg.id)
-    elseif type(msg) == "table" then
+    elseif msg.action == "status" then
+      -- answered instantly by the receiver, never queued
+      local up = os.clock() - started_at
+      local out = ("%s up %dm%02ds, %d jobs served\n"):format(name, up / 60, up % 60, total_jobs)
+        .. table.concat(status_lines(), "\n")
+      respond(sender, { ok = true, output = out }, msg.id)
+    elseif msg.action == "cancel" then
+      local sname = tostring(msg.session or "main"):gsub("[^%w_%-]", "_")
+      local ok, out = cancel_session(sname, "pic from #" .. tostring(sender))
+      respond(sender, { ok = ok, output = out }, msg.id)
+    else
       local sname = tostring(msg.session or "main"):gsub("[^%w_%-]", "_")
       local sess = getsession(sname)
       -- a client that rebooted (chunk unload) or was Ctrl+T'd re-sends its job;
       -- its OLD queued job will never be awaited — drop it so the queue doesn't
-      -- fill with orphans. (A job already RUNNING can't be stopped; it finishes
-      -- and its reply goes nowhere, which is harmless.)
+      -- fill with orphans. (A RUNNING job is only stopped by an explicit cancel.)
       for i = #sess.queue, 1, -1 do
         if sess.queue[i].sender == sender then
           table.remove(sess.queue, i)
-          print(("[%s] dropped stale queued job from %s (client re-sent)"):format(sname, tostring(sender)))
+          dlog(("[%s] dropped stale queued job from %s (client re-sent)"):format(sname, tostring(sender)))
         end
       end
       sess.queue[#sess.queue + 1] = { sender = sender, msg = msg }
@@ -160,8 +239,76 @@ local function receiver()
       elseif sess.busy or #sess.queue > 1 then note = "queued at position " .. #sess.queue end
       if note then respond(sender, { ok = true, status = note }, msg.id) end
       os.queueEvent("wcpicat_work")
-    else
-      respond(sender, { ok = false, output = "bad request" }, nil)
+    end
+  end
+end
+
+-- ---- monitor dashboard: live job/session view + touch-to-cancel -------------
+-- Re-renders every second. On an Advanced (gold) monitor, each session row has
+-- a red [CANCEL] button; touching it cancels that session's jobs.
+local function dashboard(mon)
+  local C = colors or colours
+  pcall(function() mon.setTextScale(0.5) end)
+  local function render()
+    local W, H = mon.getSize()
+    local buttons = {}
+    mon.setBackgroundColor(C.black); mon.clear()
+    local up = os.clock() - started_at
+    mon.setCursorPos(1, 1); mon.setTextColor(C.yellow)
+    mon.write(("picatd '%s'  up %dm%02ds  jobs %d"):format(name, up / 60, up % 60, total_jobs))
+    local y = 3
+    local names = {}
+    for sn in pairs(sessions) do names[#names + 1] = sn end
+    table.sort(names)
+    for _, sn in ipairs(names) do
+      if y >= H - 1 then break end
+      local s = sessions[sn]
+      mon.setCursorPos(1, y)
+      if s.state == "busy" then mon.setTextColor(C.lime)
+      elseif s.state == "booting" then mon.setTextColor(C.orange)
+      else mon.setTextColor(C.lightGray) end
+      local desc = s.state or "?"
+      if s.state == "busy" and s.current then
+        desc = ("busy %ds <- #%s"):format(os.clock() - s.current.started, tostring(s.current.sender))
+      end
+      local label = ("%-8s %s  q%d d%d"):format(sn:sub(1, 8), desc, #s.queue, s.done or 0)
+      mon.write(label:sub(1, W - 9))
+      if s.state == "busy" or s.state == "booting" or #s.queue > 0 then
+        local bx = W - 7
+        mon.setCursorPos(bx, y); mon.setBackgroundColor(C.red); mon.setTextColor(C.white)
+        mon.write("[CANCEL]")
+        mon.setBackgroundColor(C.black)
+        buttons[#buttons + 1] = { y = y, x1 = bx, x2 = W, sname = sn }
+      end
+      y = y + 1
+    end
+    -- recent log lines fill the rest
+    y = y + 1
+    if y < H then
+      mon.setCursorPos(1, y); mon.setTextColor(C.gray); mon.write(string.rep("-", W))
+      local avail = H - y
+      mon.setTextColor(C.white)
+      for i = math.max(1, #LOG - avail + 1), #LOG do
+        y = y + 1
+        mon.setCursorPos(1, y); mon.write(LOG[i]:sub(1, W))
+      end
+    end
+    return buttons
+  end
+  local buttons = render()
+  local timer = os.startTimer(1)
+  while true do
+    local ev, p1, p2, p3 = os.pullEvent()
+    if ev == "timer" and p1 == timer then
+      buttons = render()
+      timer = os.startTimer(1)
+    elseif ev == "monitor_touch" then
+      for _, b in ipairs(buttons) do
+        if p3 == b.y and p2 >= b.x1 and p2 <= b.x2 then
+          cancel_session(b.sname, "monitor touch")
+        end
+      end
+      buttons = render()
     end
   end
 end
@@ -173,21 +320,32 @@ end
 rednet.host(PROTO, name)
 print("picatd: serving as '" .. name .. "' on protocol '" .. PROTO .. "'.")
 
--- warm the default session before serving: boot + a throwaway run so the first
--- real command (and every later session, via the shared chunk cache) is fast.
-print("picatd: booting session 'main' (~30-60s)...")
-local mainsess = getsession("main")
-mainsess.s = picat.session({ root = "." })
-pcall(function() mainsess.s:run('main => println(warm).') end)
-print("picatd: ready.")
-
 -- ---- scheduler: like parallel, but coroutines can be added at runtime -------
+-- The receiver starts FIRST, then 'main' warms up as a normal (self-queued)
+-- job: requests arriving during the warm-up are queued instead of silently
+-- dropped (the bios answers lookups before the receiver runs, so clients can
+-- find the daemon while it's still warming).
 spawn(receiver)
+dlog("picatd: accepting requests; warming session 'main' (~30-60s)...")
+do
+  local mainsess = getsession("main")
+  mainsess.queue[#mainsess.queue + 1] = { sender = nil, msg = { action = "run", program = "main => println(warm)." } }
+  os.queueEvent("wcpicat_work")
+end
+local mon = peripheral.find and peripheral.find("monitor")
+if mon then
+  dlog("picatd: monitor found - dashboard on (touch a [CANCEL] to kill a session's jobs)")
+  spawn(function() dashboard(mon) end)
+else
+  dlog("picatd: no monitor attached (attach one + restart for the dashboard)")
+end
 local ev = {}
 while true do
   for i = #tasks, 1, -1 do
     local t = tasks[i]
-    if t.filter == nil or t.filter == ev[1] or ev[1] == "terminate" then
+    if t.dead then
+      table.remove(tasks, i)
+    elseif t.filter == nil or t.filter == ev[1] or ev[1] == "terminate" then
       local ok, f = coroutine.resume(t.co, (table.unpack or unpack)(ev))
       if not ok then
         print("picatd: task error: " .. tostring(f))
