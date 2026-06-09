@@ -1748,24 +1748,1055 @@ function M.instantiate(module, imports)
   return inst
 end
 
+-- Run a defined function by global index against an instance, returning the raw
+-- results array. Used by the compiler's hybrid instance to execute the few
+-- functions too large to compile, sharing the compiled instance's state.
+M.run = function(inst, funcIdx, args) return run(inst, funcIdx, args) end
+
+return M
+end
+preload['luabc'] = function(...)
+-- Lua 5.1 bytecode emitter (pure Lua). Builds a binary chunk that Cobalt's
+-- BytecodeLoader accepts: little-endian, sizeof int/size_t/instruction = 4,
+-- numbers = 8-byte doubles. See docs/plans/2026-06-09-wasm-to-cobalt-bytecode-*.
+local spack = string.pack
+local M = {}
+
+local function u8(n) return string.char(n % 256) end
+local function u32(n) return spack("<I4", n % 4294967296) end
+local function dbl(x) return spack("<d", x) end
+local function lstr(s) if s == nil then return u32(0) end return u32(#s + 1) .. s .. "\0" end
+
+-- instruction layout: op[0:6] A[6:14] C[14:23] B[23:32]; Bx[14:32]; sBx biased +131071
+local function iABC(op, a, b, c) return u32(op + a * 64 + c * 16384 + b * 8388608) end
+local function iABx(op, a, bx) return u32(op + a * 64 + bx * 16384) end
+local function iAsBx(op, a, sbx) return iABx(op, a, sbx + 131071) end
+
+local OP = {
+  MOVE = 0, LOADK = 1, LOADBOOL = 2, LOADNIL = 3, GETUPVAL = 4, GETGLOBAL = 5,
+  GETTABLE = 6, SETGLOBAL = 7, SETUPVAL = 8, SETTABLE = 9, NEWTABLE = 10,
+  ADD = 12, SUB = 13, MUL = 14, DIV = 15, MOD = 16, POW = 17, UNM = 18, NOT = 19,
+  JMP = 22, EQ = 23, LT = 24, LE = 25, TEST = 26, CALL = 28, RETURN = 30,
+  CLOSURE = 36,
+}
+M.OP = OP
+
+local function RK(k) return k + 256 end -- constant operand encoding
+M.RK = RK
+
+local HEADER = string.char(0x1b, 0x4c, 0x75, 0x61, 0x51, 0, 1, 4, 4, 4, 8, 0)
+M.HEADER = HEADER
+
+-- ---- function builder ----------------------------------------------------
+local FB = {}
+FB.__index = FB
+
+function M.func(nparams, nups)
+  return setmetatable({
+    nparams = nparams, nups = nups or 0,
+    code = {}, consts = {}, kmap = {}, children = {},
+    maxstack = nparams, jumps = {}, anchors = {},
+  }, FB)
+end
+
+-- Mark a trampoline-insertion point: the position right AFTER an unconditional
+-- control transfer (br/br_table/return/unreachable). Code there is never reached
+-- by fall-through, so build_relaxed() may splice trampoline JMPs in. No-op for
+-- the normal (single-function) build path.
+function FB:anchor() self.anchors[#self.anchors + 1] = #self.code + 1 end
+
+function FB:use(r) if r + 1 > self.maxstack then self.maxstack = r + 1 end end
+-- track a register operand that may be an RK-encoded constant (>=256 -> ignore)
+function FB:usek(r) if r < 256 and r + 1 > self.maxstack then self.maxstack = r + 1 end end
+
+function FB:knum(x)
+  local key = "n:" .. tostring(x)
+  local i = self.kmap[key]; if i then return i end
+  self.consts[#self.consts + 1] = u8(3) .. dbl(x); i = #self.consts - 1; self.kmap[key] = i; return i
+end
+function FB:kstr(s)
+  local key = "s:" .. s
+  local i = self.kmap[key]; if i then return i end
+  self.consts[#self.consts + 1] = u8(4) .. lstr(s); i = #self.consts - 1; self.kmap[key] = i; return i
+end
+function FB:kbool(b)
+  local key = "b:" .. tostring(b)
+  local i = self.kmap[key]; if i then return i end
+  self.consts[#self.consts + 1] = u8(1) .. u8(b and 1 or 0); i = #self.consts - 1; self.kmap[key] = i; return i
+end
+
+function FB:_emit(word) self.code[#self.code + 1] = word; return #self.code end
+
+-- instruction emitters (track maxstack on destination/source registers)
+function FB:MOVE(a, b) self:use(a); self:use(b); return self:_emit(iABC(OP.MOVE, a, b, 0)) end
+function FB:LOADK(a, k) self:use(a); return self:_emit(iABx(OP.LOADK, a, k)) end
+function FB:LOADBOOL(a, b, c) self:use(a); return self:_emit(iABC(OP.LOADBOOL, a, b, c)) end
+function FB:LOADNIL(a, b) self:use(a); self:use(b); return self:_emit(iABC(OP.LOADNIL, a, b, 0)) end
+function FB:GETUPVAL(a, b) self:use(a); return self:_emit(iABC(OP.GETUPVAL, a, b, 0)) end
+function FB:GETGLOBAL(a, k) self:use(a); return self:_emit(iABx(OP.GETGLOBAL, a, k)) end
+function FB:GETTABLE(a, b, c) self:use(a); self:use(b); self:usek(c); return self:_emit(iABC(OP.GETTABLE, a, b, c)) end
+function FB:SETTABLE(a, b, c) self:use(a); self:usek(b); self:usek(c); return self:_emit(iABC(OP.SETTABLE, a, b, c)) end
+function FB:NEWTABLE(a, b, c) self:use(a); return self:_emit(iABC(OP.NEWTABLE, a, b, c)) end
+function FB:ARITH(op, a, b, c) self:use(a); self:usek(b); self:usek(c); return self:_emit(iABC(op, a, b, c)) end
+function FB:UNM(a, b) self:use(a); self:use(b); return self:_emit(iABC(OP.UNM, a, b, 0)) end
+function FB:CALL(a, b, c) self:use(a); return self:_emit(iABC(OP.CALL, a, b, c)) end
+function FB:RETURN(a, b) return self:_emit(iABC(OP.RETURN, a, b, 0)) end
+function FB:CLOSURE(a, bx) self:use(a); return self:_emit(iABx(OP.CLOSURE, a, bx)) end
+function FB:EQ(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.EQ, a, b, c)) end
+function FB:LT(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.LT, a, b, c)) end
+function FB:LE(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.LE, a, b, c)) end
+function FB:TEST(a, c) return self:_emit(iABC(OP.TEST, a, 0, c)) end
+
+-- labels & jumps
+function FB:label() return { target = nil } end
+function FB:place(L) L.target = #self.code + 1 end
+function FB:jmp(L) local pos = self:_emit(iAsBx(OP.JMP, 0, 0)); self.jumps[#self.jumps + 1] = { pos = pos, label = L }; return pos end
+
+function FB:add_child(bytes) self.children[#self.children + 1] = bytes; return #self.children - 1 end
+
+function FB:build()
+  -- resolve jumps; bail if any exceeds Lua's 18-bit sBx range (the function is
+  -- too large to compile to a single Lua function -> caller falls back to interp)
+  for _, j in ipairs(self.jumps) do
+    assert(j.label.target, "unresolved jump label")
+    local sbx = j.label.target - j.pos - 1
+    if sbx > 131071 or sbx < -131071 then error("function too large: jump out of range") end
+    self.code[j.pos] = iAsBx(OP.JMP, 0, sbx)
+  end
+  local p = { lstr(nil), u32(0), u32(0), u8(self.nups), u8(self.nparams), u8(0), u8(self.maxstack), u32(#self.code) }
+  for _, c in ipairs(self.code) do p[#p + 1] = c end
+  p[#p + 1] = u32(#self.consts); for _, k in ipairs(self.consts) do p[#p + 1] = k end
+  p[#p + 1] = u32(#self.children); for _, ch in ipairs(self.children) do p[#p + 1] = ch end
+  p[#p + 1] = u32(0); p[#p + 1] = u32(0); p[#p + 1] = u32(0) -- lineInfo, locals, upvalNames
+  return table.concat(p)
+end
+
+-- ---- branch relaxation (trampolines) ------------------------------------
+-- For functions whose jumps exceed Lua's 18-bit sBx range, reroute the too-far
+-- jumps through trampoline JMPs spliced into dead-code anchor slots. Positions
+-- shift as trampolines are inserted, so we iterate to a fixed point. The result
+-- is the same proto as build(), only with relaxed jumps; semantics identical.
+function FB:build_relaxed()
+  local code = self.code
+  local N = #code
+  local MAX = M.RELAX_MAX or 130000 -- safe jump magnitude (limit 131071; margin)
+
+  -- jumps[].pos = original index of a JMP word; jumps[].label.target = original
+  -- index it targets. Map pos -> jump record for fast lookup during emission.
+  local jumpByPos = {}
+  for _, j in ipairs(self.jumps) do
+    assert(j.label.target, "unresolved jump label")
+    jumpByPos[j.pos] = j
+  end
+
+  -- anchors: original positions (ascending) where trampolines may be inserted
+  -- (just before the original instruction at that index).
+  local anchors = self.anchors
+  local nanch = #anchors
+
+  -- per-anchor trampoline bookkeeping
+  local counts = {}                 -- counts[k] = #trampolines at anchor k
+  local trampAt = {}                -- trampAt[k][labelobj] = tramp record
+  local perAnchorTramps = {}        -- perAnchorTramps[k] = ordered list
+  local allTramps = {}              -- all tramp records (creation order)
+  for k = 1, nanch do counts[k] = 0; trampAt[k] = {}; perAnchorTramps[k] = {} end
+
+  local cumc = {}                   -- cumc[k] = sum counts[1..k]; cumc[0]=0
+  local effArr = {}                 -- effArr[k] = position of anchor k's first slot
+  local function recompute()
+    local s = 0; cumc[0] = 0
+    for k = 1, nanch do s = s + counts[k]; cumc[k] = s; effArr[k] = anchors[k] + cumc[k - 1] end
+  end
+
+  -- number of anchors with anchors[k] <= t  (anchors ascending)
+  local function anchors_le(t)
+    if nanch == 0 or anchors[1] > t then return 0 end
+    local l, r, res = 1, nanch, 0
+    while l <= r do
+      local mid = math.floor((l + r) / 2)
+      if anchors[mid] <= t then res = mid; l = mid + 1 else r = mid - 1 end
+    end
+    return res
+  end
+  local function newpos(t) return t + cumc[anchors_le(t)] end
+  local function trampPos(rec) return anchors[rec.k] + cumc[rec.k - 1] + rec.j end
+  local function tpos(T)
+    if T.label then return newpos(T.label.target) else return trampPos(T.tramp) end
+  end
+
+  -- choose an anchor (effArr ascending in k) toward target position q
+  local added
+  local function choose_anchor(srcpos, q)
+    if q > srcpos then
+      local hi = q - 1; if srcpos + MAX < hi then hi = srcpos + MAX end
+      -- largest k with effArr[k] <= hi and effArr[k] > srcpos
+      local l, r, res = 1, nanch, nil
+      while l <= r do
+        local mid = math.floor((l + r) / 2)
+        if effArr[mid] <= hi then res = mid; l = mid + 1 else r = mid - 1 end
+      end
+      if res and effArr[res] > srcpos then return res end
+      return nil
+    else
+      local lo = q + 1; if srcpos - MAX > lo then lo = srcpos - MAX end
+      -- smallest k with effArr[k] >= lo and effArr[k] < srcpos
+      local l, r, res = 1, nanch, nil
+      while l <= r do
+        local mid = math.floor((l + r) / 2)
+        if effArr[mid] >= lo then res = mid; r = mid - 1 else l = mid + 1 end
+      end
+      if res and effArr[res] < srcpos then return res end
+      return nil
+    end
+  end
+
+  -- immediate target for a jump at srcpos whose ultimate destination is finalT
+  -- ({label=L}); returns an in-range target object, creating trampolines as
+  -- needed (memoized per (anchor, label)).
+  local function route1(srcpos, finalT)
+    local q = newpos(finalT.label.target)
+    local d = q - srcpos - 1
+    if d >= -MAX and d <= MAX then return finalT end
+    local k = choose_anchor(srcpos, q)
+    if not k then error("relax: no trampoline anchor in range") end
+    local L = finalT.label
+    local rec = trampAt[k][L]
+    if not rec then
+      counts[k] = counts[k] + 1
+      rec = { k = k, j = counts[k] - 1, finalT = finalT, imm = finalT }
+      trampAt[k][L] = rec
+      perAnchorTramps[k][#perAnchorTramps[k] + 1] = rec
+      allTramps[#allTramps + 1] = rec
+      added = true
+    end
+    return { tramp = rec }
+  end
+
+  -- stickiness: keep an existing immediate target while it stays in range
+  local function ok_range(srcpos, imm)
+    local d = tpos(imm) - srcpos - 1
+    return d >= -MAX and d <= MAX
+  end
+
+  -- iterate to fixed point
+  for pass = 1, 500 do
+    recompute()
+    added = false
+    for _, j in ipairs(self.jumps) do
+      local srcpos = newpos(j.pos)
+      if not (j.imm and ok_range(srcpos, j.imm)) then
+        j.imm = route1(srcpos, { label = j.label })
+      end
+    end
+    for _, rec in ipairs(allTramps) do
+      local srcpos = trampPos(rec)
+      if not ok_range(srcpos, rec.imm) then
+        rec.imm = route1(srcpos, rec.finalT)
+      end
+    end
+    if not added then break end
+  end
+  recompute()
+
+  -- materialize the final code array, splicing trampolines at anchors
+  local function jmpword(sp, T)
+    local sbx = tpos(T) - sp - 1
+    if sbx > 131071 or sbx < -131071 then error("relax: jump still out of range") end
+    return iAsBx(OP.JMP, 0, sbx)
+  end
+  local out = {}
+  local ai = 1
+  local function flush_anchors_at(idx)
+    while ai <= nanch and anchors[ai] == idx do
+      for _, rec in ipairs(perAnchorTramps[ai]) do out[#out + 1] = jmpword(trampPos(rec), rec.imm) end
+      ai = ai + 1
+    end
+  end
+  for i = 1, N do
+    flush_anchors_at(i)
+    local j = jumpByPos[i]
+    if j then out[#out + 1] = jmpword(newpos(i), j.imm) else out[#out + 1] = code[i] end
+  end
+  flush_anchors_at(N + 1)
+
+  local p = { lstr(nil), u32(0), u32(0), u8(self.nups), u8(self.nparams), u8(0), u8(self.maxstack), u32(#out) }
+  for _, c in ipairs(out) do p[#p + 1] = c end
+  p[#p + 1] = u32(#self.consts); for _, k in ipairs(self.consts) do p[#p + 1] = k end
+  p[#p + 1] = u32(#self.children); for _, ch in ipairs(self.children) do p[#p + 1] = ch end
+  p[#p + 1] = u32(0); p[#p + 1] = u32(0); p[#p + 1] = u32(0)
+  return table.concat(p)
+end
+
+-- Like M.loadable but relaxes the wasm function's jumps via trampolines.
+function M.loadable_relaxed(wasmfn)
+  local child = wasmfn:build_relaxed()
+  local fac = M.func(1, 0)
+  local idx = fac:add_child(child)
+  fac:CLOSURE(1, idx)
+  fac:_emit(iABC(OP.MOVE, 0, 0, 0))
+  fac:RETURN(1, 2)
+  fac:RETURN(0, 1)
+  return HEADER .. fac:build()
+end
+
+-- Wrap a wasm-function builder (which uses exactly 1 upvalue = ENV) in a factory
+-- proto: function(ENV) return <closure of wasmfn capturing ENV> end.
+-- Returns the full loadable chunk. loadstring(chunk)(ENV) -> the wasm function.
+function M.loadable(wasmfn)
+  local child = wasmfn:build()
+  local fac = M.func(1, 0) -- param0 = ENV
+  local idx = fac:add_child(child)
+  fac:CLOSURE(1, idx)              -- R1 = closure(child)
+  fac:_emit(iABC(OP.MOVE, 0, 0, 0)) -- upvalue binding: upval0 := parent R0 (ENV)
+  fac:RETURN(1, 2)                 -- return R1
+  fac:RETURN(0, 1)
+  return HEADER .. fac:build()
+end
+
+return M
+end
+preload['runtime'] = function(...)
+-- Runtime support for compiled wasm functions. Compiled Lua 5.1 bytecode calls
+-- these helpers (via an ENV upvalue) for everything that isn't a single Lua
+-- instruction: signed/wider arithmetic, i64 (boxed), floats, conversions, and
+-- memory/global/table/function access. Semantics mirror src/interp.lua exactly.
+local bit = require("bit")
+local I = require("int64")
+local floor, ceil, abs, huge = math.floor, math.ceil, math.abs, math.huge
+local sqrt = math.sqrt
+local spack, sunpack = string.pack, string.unpack
+local POW32, POW31, POW63, POW64 = 2 ^ 32, 2 ^ 31, 2 ^ 63, 2 ^ 64
+
+local function to_u32(x) x = x % POW32; if x < 0 then x = x + POW32 end; return x end
+local function to_s32(x) x = to_u32(x); if x >= POW31 then x = x - POW32 end; return x end
+
+local function clz32(x) if x == 0 then return 32 end local n = 0; while x < 0x80000000 do x = x * 2; n = n + 1 end return n end
+local function ctz32(x) if x == 0 then return 32 end local n = 0; while x % 2 == 0 do x = x / 2; n = n + 1 end return n end
+local function popcnt32(x) local n = 0; while x > 0 do n = n + (x % 2); x = floor(x / 2) end return n end
+
+local function f32round(x) return (sunpack("<f", spack("<f", x))) end
+local function isnan(x) return x ~= x end
+local function ftrunc(x) if x ~= x or x == huge or x == -huge then return x end return x >= 0 and floor(x) or ceil(x) end
+local function fnearest(x)
+  if x ~= x or x == huge or x == -huge or x == 0 then return x end
+  local f = floor(x); local d = x - f; local r
+  if d < 0.5 then r = f elseif d > 0.5 then r = f + 1 else r = (f % 2 == 0) and f or (f + 1) end
+  if r == 0 and x < 0 then return -0.0 end
+  return r
+end
+local function fmin(a, b)
+  if a ~= a then return a end; if b ~= b then return b end
+  if a == 0 and b == 0 then return (1 / a == -huge or 1 / b == -huge) and -0.0 or 0.0 end
+  return a < b and a or b
+end
+local function fmax(a, b)
+  if a ~= a then return a end; if b ~= b then return b end
+  if a == 0 and b == 0 then return (1 / a == huge or 1 / b == huge) and 0.0 or -0.0 end
+  return a > b and a or b
+end
+local function copysign(a, b) local s = (b < 0 or (b == 0 and 1 / b == -huge)); a = abs(a); return s and -a or a end
+
+local M = {}
+M.to_u32, M.to_s32 = to_u32, to_s32
+
+function M.make(inst)
+  local E = {}
+  local b01 = function(c) return c and 1 or 0 end
+
+  -- ===== i32 =====
+  E.mul = function(a, b)
+    local al = a % 65536; local ah = floor(a / 65536); local bl = b % 65536; local bh = floor(b / 65536)
+    return (al * bl + ((ah * bl + al * bh) % 65536) * 65536) % POW32
+  end
+  E.div_s = function(a, b) b = to_s32(b); a = to_s32(a)
+    if b == 0 then error("wasm trap: integer divide by zero") end
+    if a == -2147483648 and b == -1 then error("wasm trap: integer overflow") end
+    local q = a / b; return to_u32(q >= 0 and floor(q) or -floor(-q)) end
+  E.div_u = function(a, b) if b == 0 then error("wasm trap: integer divide by zero") end return floor(a / b) end
+  E.rem_s = function(a, b) b = to_s32(b); a = to_s32(a)
+    if b == 0 then error("wasm trap: integer divide by zero") end
+    local q = a / b; q = q >= 0 and floor(q) or -floor(-q); return to_u32(a - q * b) end
+  E.rem_u = function(a, b) if b == 0 then error("wasm trap: integer divide by zero") end return a - floor(a / b) * b end
+  E.band = function(a, b) return bit.band(a, b) end
+  E.bor = function(a, b) return bit.bor(a, b) end
+  E.bxor = function(a, b) return bit.bxor(a, b) end
+  E.shl = function(a, b) return bit.lshift(a, b % 32) end
+  E.shr_s = function(a, b) return bit.arshift(a, b % 32) end
+  E.shr_u = function(a, b) return bit.rshift(a, b % 32) end
+  E.rotl = function(a, b) return bit.lrotate(a, b % 32) end
+  E.rotr = function(a, b) return bit.rrotate(a, b % 32) end
+  E.clz = clz32; E.ctz = ctz32; E.popcnt = popcnt32
+  E.eqz = function(a) return b01(a == 0) end
+  E.eq = function(a, b) return b01(a == b) end
+  E.ne = function(a, b) return b01(a ~= b) end
+  E.lt_u = function(a, b) return b01(a < b) end
+  E.gt_u = function(a, b) return b01(a > b) end
+  E.le_u = function(a, b) return b01(a <= b) end
+  E.ge_u = function(a, b) return b01(a >= b) end
+  E.lt_s = function(a, b) return b01(to_s32(a) < to_s32(b)) end
+  E.gt_s = function(a, b) return b01(to_s32(a) > to_s32(b)) end
+  E.le_s = function(a, b) return b01(to_s32(a) <= to_s32(b)) end
+  E.ge_s = function(a, b) return b01(to_s32(a) >= to_s32(b)) end
+  E.i32_extend8_s = function(a) a = a % 256; return to_u32(a >= 128 and a - 256 or a) end
+  E.i32_extend16_s = function(a) a = a % 65536; return to_u32(a >= 32768 and a - 65536 or a) end
+
+  -- ===== i64 (boxed {h,l}) =====
+  E.mk64 = I.mk
+  E.i64_add = I.add; E.i64_sub = I.sub; E.i64_mul = I.mul
+  E.i64_div_s = I.div_s; E.i64_div_u = I.div_u; E.i64_rem_s = I.rem_s; E.i64_rem_u = I.rem_u
+  E.i64_and = I.band; E.i64_or = I.bor; E.i64_xor = I.bxor
+  E.i64_shl = function(a, b) return I.shl(a, b.l % 64) end
+  E.i64_shr_s = function(a, b) return I.shr_s(a, b.l % 64) end
+  E.i64_shr_u = function(a, b) return I.shr_u(a, b.l % 64) end
+  E.i64_rotl = function(a, b) return I.rotl(a, b.l % 64) end
+  E.i64_rotr = function(a, b) return I.rotr(a, b.l % 64) end
+  E.i64_clz = function(a) return I.from_u32(I.clz(a)) end
+  E.i64_ctz = function(a) return I.from_u32(I.ctz(a)) end
+  E.i64_popcnt = function(a) return I.from_u32(I.popcnt(a)) end
+  E.i64_eqz = function(a) return b01(I.eqz(a)) end
+  E.i64_eq = function(a, b) return b01(I.eq(a, b)) end
+  E.i64_ne = function(a, b) return b01(not I.eq(a, b)) end
+  E.i64_lt_s = function(a, b) return b01(I.lt_s(a, b)) end
+  E.i64_lt_u = function(a, b) return b01(I.lt_u(a, b)) end
+  E.i64_gt_s = function(a, b) return b01(I.lt_s(b, a)) end
+  E.i64_gt_u = function(a, b) return b01(I.lt_u(b, a)) end
+  E.i64_le_s = function(a, b) return b01(not I.lt_s(b, a)) end
+  E.i64_le_u = function(a, b) return b01(not I.lt_u(b, a)) end
+  E.i64_ge_s = function(a, b) return b01(not I.lt_s(a, b)) end
+  E.i64_ge_u = function(a, b) return b01(not I.lt_u(a, b)) end
+
+  -- ===== conversions =====
+  E.i32_wrap_i64 = function(a) return to_u32(a.l) end
+  E.i64_extend_i32_s = function(x) return I.from_s32(to_s32(x)) end
+  E.i64_extend_i32_u = function(x) return I.from_u32(x) end
+  E.i64_extend8_s = function(a) local x = a.l % 256; return I.from_double_s(x >= 128 and x - 256 or x) end
+  E.i64_extend16_s = function(a) local x = a.l % 65536; return I.from_double_s(x >= 32768 and x - 65536 or x) end
+  E.i64_extend32_s = function(a) return I.from_s32(to_s32(a.l)) end
+  E.i32_trunc_f_s = function(x) x = ftrunc(x); if isnan(x) or x < -POW31 or x >= POW31 then error("wasm trap: invalid conversion to integer") end return to_u32(x) end
+  E.i32_trunc_f_u = function(x) x = ftrunc(x); if isnan(x) or x <= -1 or x >= POW32 then error("wasm trap: invalid conversion to integer") end return to_u32(x) end
+  E.i64_trunc_f_s = function(x) x = ftrunc(x); if isnan(x) or x < -POW63 or x >= POW63 then error("wasm trap: invalid conversion to integer") end return I.from_double_s(x) end
+  E.i64_trunc_f_u = function(x) x = ftrunc(x); if isnan(x) or x <= -1 or x >= POW64 then error("wasm trap: invalid conversion to integer") end return I.from_double_u(x) end
+  E.i32_trunc_sat_f_s = function(x) if isnan(x) then return 0 elseif x < -POW31 then return to_u32(-POW31) elseif x >= POW31 then return POW31 - 1 else return to_u32(ftrunc(x)) end end
+  E.i32_trunc_sat_f_u = function(x) if isnan(x) or x <= 0 then return 0 elseif x >= POW32 then return POW32 - 1 else return to_u32(ftrunc(x)) end end
+  E.i64_trunc_sat_f_s = function(x) if isnan(x) then return I.ZERO elseif x < -POW63 then return I.mk(0x80000000, 0) elseif x >= POW63 then return I.mk(0x7FFFFFFF, 0xFFFFFFFF) else return I.from_double_s(ftrunc(x)) end end
+  E.i64_trunc_sat_f_u = function(x) if isnan(x) or x <= 0 then return I.ZERO elseif x >= POW64 then return I.mk(0xFFFFFFFF, 0xFFFFFFFF) else return I.from_double_u(ftrunc(x)) end end
+  E.f32_convert_i32_s = function(x) return f32round(to_s32(x)) end
+  E.f32_convert_i32_u = function(x) return f32round(x) end
+  E.f64_convert_i32_s = function(x) return to_s32(x) + 0.0 end
+  E.f64_convert_i32_u = function(x) return x + 0.0 end
+  E.f32_convert_i64_s = function(a) return f32round(I.to_double_s(a)) end
+  E.f32_convert_i64_u = function(a) return f32round(I.to_double_u(a)) end
+  E.f64_convert_i64_s = function(a) return I.to_double_s(a) end
+  E.f64_convert_i64_u = function(a) return I.to_double_u(a) end
+  E.f32_demote_f64 = function(x) return f32round(x) end
+  E.f64_promote_f32 = function(x) return x end
+  E.i32_reinterpret_f32 = function(x) return (sunpack("<I4", spack("<f", x))) end
+  E.f32_reinterpret_i32 = function(x) return (sunpack("<f", spack("<I4", x))) end
+  E.i64_reinterpret_f64 = function(x) return I.from_bytes8(spack("<d", x)) end
+  E.f64_reinterpret_i64 = function(a) return (sunpack("<d", I.to_bytes(a))) end
+
+  -- ===== floats =====
+  E.f32round = f32round
+  E.fabs = abs; E.fneg = function(x) return -x end
+  E.ceil = ceil; E.floor = floor; E.ftrunc = ftrunc; E.fnearest = fnearest; E.fsqrt = sqrt
+  E.fmin = fmin; E.fmax = fmax; E.copysign = copysign
+  E.f32_abs = function(x) return f32round(abs(x)) end
+  E.f32_neg = function(x) return f32round(-x) end
+  E.f32_ceil = function(x) return f32round(ceil(x)) end
+  E.f32_floor = function(x) return f32round(floor(x)) end
+  E.f32_trunc = function(x) return f32round(ftrunc(x)) end
+  E.f32_nearest = function(x) return f32round(fnearest(x)) end
+  E.f32_sqrt = function(x) return f32round(sqrt(x)) end
+  E.f32_add = function(a, b) return f32round(a + b) end
+  E.f32_sub = function(a, b) return f32round(a - b) end
+  E.f32_mul = function(a, b) return f32round(a * b) end
+  E.f32_div = function(a, b) return f32round(a / b) end
+  E.f32_min = function(a, b) return f32round(fmin(a, b)) end
+  E.f32_max = function(a, b) return f32round(fmax(a, b)) end
+  E.f32_copysign = function(a, b) return f32round(copysign(a, b)) end
+  E.f64_min = fmin; E.f64_max = fmax; E.f64_copysign = copysign
+  E.feq = function(a, b) return b01(a == b) end
+  E.fne = function(a, b) return b01(a ~= b) end
+  E.flt = function(a, b) return b01(a < b) end
+  E.fgt = function(a, b) return b01(a > b) end
+  E.fle = function(a, b) return b01(a <= b) end
+  E.fge = function(a, b) return b01(a >= b) end
+
+  -- ===== memory (closes over inst.memory) =====
+  if inst then
+    local mem = inst.memory
+    local function bounds(a, sz) if a + sz > mem.pages * 65536 then error("wasm trap: out of bounds memory access") end end
+    E.i32_load = function(a) bounds(a, 4); return (sunpack("<I4", mem:loadstr(a, 4))) end
+    E.i32_load8_u = function(a) bounds(a, 1); return mem:get8(a) end
+    E.i32_load8_s = function(a) bounds(a, 1); local x = mem:get8(a); return to_u32(x >= 128 and x - 256 or x) end
+    E.i32_load16_u = function(a) bounds(a, 2); return (sunpack("<I2", mem:loadstr(a, 2))) end
+    E.i32_load16_s = function(a) bounds(a, 2); return to_u32((sunpack("<i2", mem:loadstr(a, 2)))) end
+    E.i32_store = function(a, v) bounds(a, 4); mem:storestr(a, spack("<I4", v)) end
+    E.i32_store8 = function(a, v) bounds(a, 1); mem:set8(a, v % 256) end
+    E.i32_store16 = function(a, v) bounds(a, 2); mem:storestr(a, spack("<I2", v % 65536)) end
+    E.i64_load = function(a) bounds(a, 8); return I.from_bytes8(mem:loadstr(a, 8)) end
+    E.i64_load8_u = function(a) bounds(a, 1); return I.from_u32(mem:get8(a)) end
+    E.i64_load8_s = function(a) bounds(a, 1); local x = mem:get8(a); return I.from_double_s(x >= 128 and x - 256 or x) end
+    E.i64_load16_u = function(a) bounds(a, 2); return I.from_u32((sunpack("<I2", mem:loadstr(a, 2)))) end
+    E.i64_load16_s = function(a) bounds(a, 2); return I.from_double_s((sunpack("<i2", mem:loadstr(a, 2)))) end
+    E.i64_load32_u = function(a) bounds(a, 4); return I.from_u32((sunpack("<I4", mem:loadstr(a, 4)))) end
+    E.i64_load32_s = function(a) bounds(a, 4); return I.from_s32(to_s32((sunpack("<I4", mem:loadstr(a, 4))))) end
+    E.i64_store = function(a, v) bounds(a, 8); mem:storestr(a, I.to_bytes(v)) end
+    E.i64_store8 = function(a, v) bounds(a, 1); mem:set8(a, v.l % 256) end
+    E.i64_store16 = function(a, v) bounds(a, 2); mem:storestr(a, spack("<I2", v.l % 65536)) end
+    E.i64_store32 = function(a, v) bounds(a, 4); mem:storestr(a, spack("<I4", v.l)) end
+    E.f32_load = function(a) bounds(a, 4); return (sunpack("<f", mem:loadstr(a, 4))) end
+    E.f32_store = function(a, v) bounds(a, 4); mem:storestr(a, spack("<f", v)) end
+    E.f64_load = function(a) bounds(a, 8); return (sunpack("<d", mem:loadstr(a, 8))) end
+    E.f64_store = function(a, v) bounds(a, 8); mem:storestr(a, spack("<d", v)) end
+    E.mem_size = function() return mem:size() end
+    E.mem_grow = function(d) return to_u32(mem:grow(d)) end
+    E.mem_fill = function(d, val, n) if d + n > mem.pages * 65536 then error("wasm trap: out of bounds memory access") end mem:fill(d, val, n) end
+    E.mem_copy = function(d, s, n) local lim = mem.pages * 65536; if d + n > lim or s + n > lim then error("wasm trap: out of bounds memory access") end mem:copy(d, s, n) end
+
+    E.funcs = inst.funcs
+    E.globals = inst.globals
+    E.tables = inst.tables
+  end
+
+  E.ZERO64 = I.ZERO
+  E.__unreachable = function() error("wasm trap: unreachable") end
+
+  -- Cooperative yield for CC's watchdog: compiled loop back-edges call __tick;
+  -- every Nth call it yields to the event loop (queueEvent/pullEvent resumes in
+  -- the same tick, just resetting the "too long without yielding" timer).
+  if type(os) == "table" and os.queueEvent and os.pullEvent then
+    E.__yield = function() os.queueEvent("wasmcraft"); os.pullEvent("wasmcraft") end
+  end
+  local ticks = 0
+  E.__tick = function()
+    ticks = ticks + 1
+    if ticks >= 100000 then ticks = 0; if E.__yield then E.__yield() end end
+  end
+  return E
+end
+
+return M
+end
+preload['compiler'] = function(...)
+-- wasm -> Lua 5.1 bytecode compiler (Cobalt fast path). Full op coverage:
+-- i32/i64/f32/f64 arithmetic, conversions, memory, globals, calls, structured
+-- control. Compiled functions take wasm params as Lua args, return wasm results
+-- as Lua returns; the runtime ENV (helpers + memory/funcs/globals/tables) is an
+-- upvalue. Self-contained: every defined function compiles into a closure that
+-- calls others via ENV.funcs. Block/loop/if support results but not params.
+local luabc = require("luabc")
+local OP, RK = luabc.OP, luabc.RK
+local runtime = require("runtime")
+local Memory = require("memory")
+local I = require("int64")
+
+local function f32round(x) return (string.unpack("<f", string.pack("<f", x))) end
+local function host_to_internal(t, v)
+  if t == "i32" then return runtime.to_u32(v or 0) end
+  if t == "i64" then if I.is(v) then return v end return I.from_double_s(v or 0) end
+  if t == "f32" then return f32round(v or 0) end
+  return v or 0
+end
+local function internal_to_host(t, v)
+  if t == "i32" then return runtime.to_s32(v) end
+  if t == "i64" then return I.to_double_s(v) end
+  return v
+end
+
+local M = {}
+
+-- Inject a yield tick at loop back-edges so long compiled runs cooperate with
+-- CC:Tweaked's "too long without yielding" watchdog. Auto-on only under CC (where
+-- os.queueEvent exists); standalone Cobalt leaves it off for full speed.
+M.yield_in_loops = type(os) == "table" and rawget(os, "queueEvent") ~= nil
+
+-- op -> helper name. These pop their args and push one result (the helper does
+-- the work). Binary unless noted; order of args = stack order.
+local HELPER = {}
+do
+  local i32b = { "mul", "div_s", "div_u", "rem_s", "rem_u", "and", "or", "xor",
+    "shl", "shr_s", "shr_u", "rotl", "rotr", "eq", "ne",
+    "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u" }
+  for _, n in ipairs(i32b) do
+    local hn = n
+    if n == "and" then hn = "band" elseif n == "or" then hn = "bor" elseif n == "xor" then hn = "bxor" end
+    HELPER["i32." .. n] = { hn, 2 }
+  end
+  HELPER["i32.clz"] = { "clz", 1 }; HELPER["i32.ctz"] = { "ctz", 1 }; HELPER["i32.popcnt"] = { "popcnt", 1 }
+  HELPER["i32.eqz"] = { "eqz", 1 }
+  HELPER["i32.extend8_s"] = { "i32_extend8_s", 1 }; HELPER["i32.extend16_s"] = { "i32_extend16_s", 1 }
+  -- i64
+  local i64b = { "add", "sub", "mul", "div_s", "div_u", "rem_s", "rem_u", "and", "or", "xor",
+    "shl", "shr_s", "shr_u", "rotl", "rotr", "eq", "ne",
+    "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u" }
+  for _, n in ipairs(i64b) do HELPER["i64." .. n] = { "i64_" .. n, 2 } end
+  HELPER["i64.clz"] = { "i64_clz", 1 }; HELPER["i64.ctz"] = { "i64_ctz", 1 }; HELPER["i64.popcnt"] = { "i64_popcnt", 1 }
+  HELPER["i64.eqz"] = { "i64_eqz", 1 }
+  HELPER["i64.extend8_s"] = { "i64_extend8_s", 1 }; HELPER["i64.extend16_s"] = { "i64_extend16_s", 1 }
+  HELPER["i64.extend32_s"] = { "i64_extend32_s", 1 }
+  -- f32 (rounded helpers)
+  for _, n in ipairs({ "abs", "neg", "ceil", "floor", "trunc", "nearest", "sqrt", "add", "sub", "mul", "div", "min", "max", "copysign" }) do
+    HELPER["f32." .. n] = { "f32_" .. n, (n == "abs" or n == "neg" or n == "ceil" or n == "floor" or n == "trunc" or n == "nearest" or n == "sqrt") and 1 or 2 }
+  end
+  HELPER["f32.eq"] = { "feq", 2 }; HELPER["f32.ne"] = { "fne", 2 }; HELPER["f32.lt"] = { "flt", 2 }
+  HELPER["f32.gt"] = { "fgt", 2 }; HELPER["f32.le"] = { "fle", 2 }; HELPER["f32.ge"] = { "fge", 2 }
+  -- f64 unary + min/max/copysign via helpers; add/sub/mul/div/neg inline below
+  HELPER["f64.abs"] = { "fabs", 1 }; HELPER["f64.ceil"] = { "ceil", 1 }; HELPER["f64.floor"] = { "floor", 1 }
+  HELPER["f64.trunc"] = { "ftrunc", 1 }; HELPER["f64.nearest"] = { "fnearest", 1 }; HELPER["f64.sqrt"] = { "fsqrt", 1 }
+  HELPER["f64.min"] = { "f64_min", 2 }; HELPER["f64.max"] = { "f64_max", 2 }; HELPER["f64.copysign"] = { "f64_copysign", 2 }
+  HELPER["f64.eq"] = { "feq", 2 }; HELPER["f64.ne"] = { "fne", 2 }; HELPER["f64.lt"] = { "flt", 2 }
+  HELPER["f64.gt"] = { "fgt", 2 }; HELPER["f64.le"] = { "fle", 2 }; HELPER["f64.ge"] = { "fge", 2 }
+  -- conversions
+  HELPER["i32.wrap_i64"] = { "i32_wrap_i64", 1 }
+  HELPER["i64.extend_i32_s"] = { "i64_extend_i32_s", 1 }; HELPER["i64.extend_i32_u"] = { "i64_extend_i32_u", 1 }
+  HELPER["i32.trunc_f32_s"] = { "i32_trunc_f_s", 1 }; HELPER["i32.trunc_f64_s"] = { "i32_trunc_f_s", 1 }
+  HELPER["i32.trunc_f32_u"] = { "i32_trunc_f_u", 1 }; HELPER["i32.trunc_f64_u"] = { "i32_trunc_f_u", 1 }
+  HELPER["i64.trunc_f32_s"] = { "i64_trunc_f_s", 1 }; HELPER["i64.trunc_f64_s"] = { "i64_trunc_f_s", 1 }
+  HELPER["i64.trunc_f32_u"] = { "i64_trunc_f_u", 1 }; HELPER["i64.trunc_f64_u"] = { "i64_trunc_f_u", 1 }
+  HELPER["i32.trunc_sat_f32_s"] = { "i32_trunc_sat_f_s", 1 }; HELPER["i32.trunc_sat_f64_s"] = { "i32_trunc_sat_f_s", 1 }
+  HELPER["i32.trunc_sat_f32_u"] = { "i32_trunc_sat_f_u", 1 }; HELPER["i32.trunc_sat_f64_u"] = { "i32_trunc_sat_f_u", 1 }
+  HELPER["i64.trunc_sat_f32_s"] = { "i64_trunc_sat_f_s", 1 }; HELPER["i64.trunc_sat_f64_s"] = { "i64_trunc_sat_f_s", 1 }
+  HELPER["i64.trunc_sat_f32_u"] = { "i64_trunc_sat_f_u", 1 }; HELPER["i64.trunc_sat_f64_u"] = { "i64_trunc_sat_f_u", 1 }
+  HELPER["f32.convert_i32_s"] = { "f32_convert_i32_s", 1 }; HELPER["f32.convert_i32_u"] = { "f32_convert_i32_u", 1 }
+  HELPER["f64.convert_i32_s"] = { "f64_convert_i32_s", 1 }; HELPER["f64.convert_i32_u"] = { "f64_convert_i32_u", 1 }
+  HELPER["f32.convert_i64_s"] = { "f32_convert_i64_s", 1 }; HELPER["f32.convert_i64_u"] = { "f32_convert_i64_u", 1 }
+  HELPER["f64.convert_i64_s"] = { "f64_convert_i64_s", 1 }; HELPER["f64.convert_i64_u"] = { "f64_convert_i64_u", 1 }
+  HELPER["f32.demote_f64"] = { "f32_demote_f64", 1 }; HELPER["f64.promote_f32"] = { "f64_promote_f32", 1 }
+  HELPER["i32.reinterpret_f32"] = { "i32_reinterpret_f32", 1 }; HELPER["f32.reinterpret_i32"] = { "f32_reinterpret_i32", 1 }
+  HELPER["i64.reinterpret_f64"] = { "i64_reinterpret_f64", 1 }; HELPER["f64.reinterpret_i64"] = { "f64_reinterpret_i64", 1 }
+end
+
+local LOAD = {
+  ["i32.load"] = "i32_load", ["i32.load8_u"] = "i32_load8_u", ["i32.load8_s"] = "i32_load8_s",
+  ["i32.load16_u"] = "i32_load16_u", ["i32.load16_s"] = "i32_load16_s",
+  ["i64.load"] = "i64_load", ["i64.load8_u"] = "i64_load8_u", ["i64.load8_s"] = "i64_load8_s",
+  ["i64.load16_u"] = "i64_load16_u", ["i64.load16_s"] = "i64_load16_s",
+  ["i64.load32_u"] = "i64_load32_u", ["i64.load32_s"] = "i64_load32_s",
+  ["f32.load"] = "f32_load", ["f64.load"] = "f64_load",
+}
+local STORE = {
+  ["i32.store"] = "i32_store", ["i32.store8"] = "i32_store8", ["i32.store16"] = "i32_store16",
+  ["i64.store"] = "i64_store", ["i64.store8"] = "i64_store8", ["i64.store16"] = "i64_store16", ["i64.store32"] = "i64_store32",
+  ["f32.store"] = "f32_store", ["f64.store"] = "f64_store",
+}
+
+local function functype_of(mod, funcidx)
+  local tix
+  if funcidx < mod.numImportedFuncs then tix = mod.importedFuncs[funcidx + 1].typeidx
+  else tix = mod.funcTypeIdx[funcidx - mod.numImportedFuncs + 1] end
+  return mod.types[tix + 1]
+end
+
+local function bt_arity(mod, bt)
+  if bt.typeidx then local ft = mod.types[bt.typeidx + 1]; return #ft.params, #ft.results end
+  return #bt.params, #bt.results
+end
+
+local function build_fb(mod, fidx)
+  local ftype = mod.types[mod.funcTypeIdx[fidx] + 1]
+  local code = mod.codes[fidx]
+  local nparams = #ftype.params
+  local locals_types = {}
+  for i = 1, nparams do locals_types[i - 1] = ftype.params[i] end
+  for i = 1, #code.locals do locals_types[nparams + i - 1] = code.locals[i] end
+  local nlocals = nparams + #code.locals
+  -- wasm locals live in a Lua table L (not registers) so functions with many
+  -- locals don't blow past Lua's ~250-register limit. Registers are only the
+  -- ENV, the L table, and the (shallow) operand stack.
+  local renv = nparams         -- ENV upvalue cached here
+  local Ltab = nparams + 1     -- locals table
+  local kscr = nparams + 2     -- scratch register for spilling out-of-range constants
+  local base = nparams + 3     -- operand stack base
+  local nres = #ftype.results
+
+  local fb = luabc.func(nparams, 1)
+  fb:use(base)
+  local kwrap = fb:knum(4294967296.0)
+  local k0 = fb:knum(0.0)
+  -- Operand usable in an RK position. Lua's RK field is 9 bits, so a constant
+  -- index must be < 256; spill larger ones into kscr via LOADK.
+  local function kop(kidx)
+    if kidx < 256 then return RK(kidx) end
+    fb:LOADK(kscr, kidx); return kscr
+  end
+  fb:GETUPVAL(renv, 0)
+  fb:NEWTABLE(Ltab, 0, 0)
+  for r = 0, nparams - 1 do fb:SETTABLE(Ltab, kop(fb:knum(r)), r) end
+  for r = nparams, nlocals - 1 do
+    if locals_types[r] == "i64" then
+      local z = base; fb:GETTABLE(z, renv, kop(fb:kstr("ZERO64"))); fb:SETTABLE(Ltab, kop(fb:knum(r)), z)
+    else
+      fb:SETTABLE(Ltab, kop(fb:knum(r)), kop(k0))
+    end
+  end
+
+  local vsp = 0
+  local ctrl = {}
+  local dead = false
+  local dead_depth = 0
+  local function go_dead() dead = true; dead_depth = #ctrl end
+
+  local function helper(name, nargs, nresx)
+    local argbase = base + vsp - nargs
+    local f = base + vsp
+    fb:GETTABLE(f, renv, kop(fb:kstr(name)))
+    for i = 0, nargs - 1 do fb:MOVE(f + 1 + i, argbase + i) end
+    fb:CALL(f, nargs + 1, nresx + 1)
+    for i = 0, nresx - 1 do fb:MOVE(argbase + i, f + i) end
+    vsp = vsp - nargs + nresx
+  end
+
+  local function ea_inline(addrreg, offset)
+    if offset and offset ~= 0 then
+      fb:ARITH(OP.ADD, addrreg, addrreg, kop(fb:knum(offset)))
+      fb:ARITH(OP.MOD, addrreg, addrreg, kop(kwrap))
+    end
+  end
+
+  local function branch_to(fr)
+    local keep = fr.br_arity
+    local dst = base + fr.height
+    local src = base + vsp - keep
+    if dst ~= src then for i = 0, keep - 1 do fb:MOVE(dst + i, src + i) end end
+    fb:jmp(fr.exit)
+  end
+
+  -- ENV.__tick() at a loop back-edge (only when yield-in-loops is enabled)
+  local function emit_tick(fr)
+    if M.yield_in_loops and fr.kind == "loop" then
+      local t = base + vsp
+      fb:GETTABLE(t, renv, kop(fb:kstr("__tick"))); fb:CALL(t, 1, 1)
+    end
+  end
+
+  local function do_end()
+    local fr = ctrl[#ctrl]; ctrl[#ctrl] = nil
+    if fr.kind == "block" then fb:place(fr.exit)
+    elseif fr.kind == "if" then
+      if not fr.else_seen then fb:place(fr.else_label) end
+      fb:place(fr.exit)
+    end
+    vsp = fr.height + fr.results
+  end
+  local function do_else()
+    local fr = ctrl[#ctrl]
+    branch_to(fr)
+    fb:place(fr.else_label); fr.else_seen = true
+    vsp = fr.height
+  end
+
+  for _, ins in ipairs(code.body) do
+    local op = ins.op
+    if dead then
+      if (op == "end" or op == "else") and #ctrl == dead_depth then
+        if op == "end" then do_end() else do_else() end
+        dead = false
+      elseif op == "block" or op == "loop" or op == "if" then
+        ctrl[#ctrl + 1] = { kind = "dead", height = vsp, results = 0, br_arity = 0 }
+      elseif op == "end" then
+        ctrl[#ctrl] = nil -- pop a nested placeholder inside the dead region
+      end
+    elseif op == "local.get" then fb:GETTABLE(base + vsp, Ltab, kop(fb:knum(ins.x))); vsp = vsp + 1
+    elseif op == "local.set" then vsp = vsp - 1; fb:SETTABLE(Ltab, kop(fb:knum(ins.x)), base + vsp)
+    elseif op == "local.tee" then fb:SETTABLE(Ltab, kop(fb:knum(ins.x)), base + vsp - 1)
+    elseif op == "global.get" then
+      local g = base + vsp
+      fb:GETTABLE(g, renv, kop(fb:kstr("globals"))); fb:GETTABLE(g, g, kop(fb:knum(ins.x)))
+      vsp = vsp + 1
+    elseif op == "global.set" then
+      vsp = vsp - 1; local v = base + vsp; local t = base + vsp + 1
+      fb:GETTABLE(t, renv, kop(fb:kstr("globals"))); fb:SETTABLE(t, kop(fb:knum(ins.x)), v)
+    elseif op == "drop" then vsp = vsp - 1
+    elseif op == "nop" then -- nothing
+    elseif op == "i32.const" then fb:LOADK(base + vsp, fb:knum(ins.v % 4294967296)); vsp = vsp + 1
+    elseif op == "f32.const" or op == "f64.const" then fb:LOADK(base + vsp, fb:knum(ins.v)); vsp = vsp + 1
+    elseif op == "i64.const" then
+      local f = base + vsp
+      fb:GETTABLE(f, renv, kop(fb:kstr("mk64")))
+      fb:LOADK(f + 1, fb:knum(ins.v.h)); fb:LOADK(f + 2, fb:knum(ins.v.l))
+      fb:CALL(f, 3, 2); vsp = vsp + 1
+    elseif op == "i32.add" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.ADD, a, a, b); fb:ARITH(OP.MOD, a, a, kop(kwrap)); vsp = vsp - 1
+    elseif op == "i32.sub" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.SUB, a, a, b); fb:ARITH(OP.MOD, a, a, kop(kwrap)); vsp = vsp - 1
+    elseif op == "f64.add" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.ADD, a, a, b); vsp = vsp - 1
+    elseif op == "f64.sub" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.SUB, a, a, b); vsp = vsp - 1
+    elseif op == "f64.mul" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.MUL, a, a, b); vsp = vsp - 1
+    elseif op == "f64.div" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.DIV, a, a, b); vsp = vsp - 1
+    elseif op == "f64.neg" then local a = base + vsp - 1; fb:UNM(a, a)
+    elseif HELPER[op] then helper(HELPER[op][1], HELPER[op][2], 1)
+    elseif LOAD[op] then ea_inline(base + vsp - 1, ins.offset); helper(LOAD[op], 1, 1)
+    elseif STORE[op] then ea_inline(base + vsp - 2, ins.offset); helper(STORE[op], 2, 0)
+    elseif op == "memory.size" then helper("mem_size", 0, 1)
+    elseif op == "memory.grow" then helper("mem_grow", 1, 1)
+    elseif op == "memory.fill" then helper("mem_fill", 3, 0)
+    elseif op == "memory.copy" then helper("mem_copy", 3, 0)
+    elseif op == "select" then
+      local c = base + vsp - 1; local bb = base + vsp - 2; local aa = base + vsp - 3
+      fb:EQ(0, c, kop(k0)); local L = fb:label(); fb:jmp(L); fb:MOVE(aa, bb); fb:place(L); vsp = vsp - 2
+    elseif op == "block" then
+      local p, r = bt_arity(mod, ins.bt); assert(p == 0, "block with params")
+      ctrl[#ctrl + 1] = { kind = "block", height = vsp, results = r, br_arity = r, exit = fb:label() }
+    elseif op == "loop" then
+      local p, r = bt_arity(mod, ins.bt); assert(p == 0, "loop with params")
+      local L = fb:label(); fb:place(L)
+      ctrl[#ctrl + 1] = { kind = "loop", height = vsp, results = r, br_arity = 0, exit = L }
+    elseif op == "if" then
+      local p, r = bt_arity(mod, ins.bt); assert(p == 0, "if with params")
+      vsp = vsp - 1; local cond = base + vsp
+      local fr = { kind = "if", height = vsp, results = r, br_arity = r, exit = fb:label(), else_label = fb:label(), else_seen = false }
+      fb:EQ(1, cond, kop(k0)); fb:jmp(fr.else_label)
+      ctrl[#ctrl + 1] = fr
+    elseif op == "else" then do_else()
+    elseif op == "end" then do_end()
+    elseif op == "br" then
+      local fr = ctrl[#ctrl - ins.label]; emit_tick(fr); branch_to(fr); fb:anchor(); go_dead()
+    elseif op == "br_if" then
+      vsp = vsp - 1; local cond = base + vsp
+      local fr = ctrl[#ctrl - ins.label]
+      emit_tick(fr)
+      if fr.br_arity == 0 then
+        fb:EQ(0, cond, kop(k0)); fb:jmp(fr.exit)
+      else
+        -- if cond==0 skip the branch; else move values + jump
+        fb:EQ(1, cond, kop(k0)); local L = fb:label(); fb:jmp(L)
+        branch_to(fr); fb:place(L)
+      end
+    elseif op == "br_table" then
+      vsp = vsp - 1; local idx = base + vsp
+      for i = 1, #ins.targets do
+        local fr = ctrl[#ctrl - ins.targets[i]]
+        fb:EQ(1, idx, kop(fb:knum(i - 1))); local L = fb:label(); fb:jmp(L)
+        -- equal: branch; else fall to next compare
+        local L2 = fb:label(); fb:jmp(L2) -- unconditional skip of branch block
+        fb:place(L) -- target when idx==i-1
+        vsp = vsp + 1 -- idx still logically present for value moves
+        branch_to(fr); vsp = vsp - 1
+        fb:place(L2)
+      end
+      local frd = ctrl[#ctrl - ins.default]
+      vsp = vsp + 1; branch_to(frd); vsp = vsp - 1
+      fb:anchor(); go_dead()
+    elseif op == "return" then
+      if nres == 0 then fb:RETURN(0, 1) else fb:RETURN(base + vsp - nres, nres + 1) end
+      fb:anchor(); go_dead()
+    elseif op == "unreachable" then
+      local f = base + vsp; fb:GETTABLE(f, renv, kop(fb:kstr("__unreachable"))); fb:CALL(f, 1, 1); fb:anchor(); go_dead()
+    elseif op == "call" then
+      local ct = functype_of(mod, ins.func)
+      local na = #ct.params; local nr = #ct.results
+      local argbase = base + vsp - na; local fr = base + vsp
+      fb:GETTABLE(fr, renv, kop(fb:kstr("funcs"))); fb:GETTABLE(fr, fr, kop(fb:knum(ins.func)))
+      for i = 0, na - 1 do fb:MOVE(fr + 1 + i, argbase + i) end
+      fb:CALL(fr, na + 1, nr + 1)
+      for i = 0, nr - 1 do fb:MOVE(argbase + i, fr + i) end
+      vsp = vsp - na + nr
+    elseif op == "call_indirect" then
+      local ct = mod.types[ins.typeidx + 1]
+      local na = #ct.params; local nr = #ct.results
+      vsp = vsp - 1; local idxr = base + vsp
+      local argbase = base + vsp - na; local fr = base + vsp + 1; local tmp = base + vsp + 2
+      fb:GETTABLE(fr, renv, kop(fb:kstr("tables"))); fb:GETTABLE(fr, fr, kop(fb:knum(ins.table)))
+      fb:GETTABLE(fr, fr, idxr)
+      fb:GETTABLE(tmp, renv, kop(fb:kstr("funcs"))); fb:GETTABLE(fr, tmp, fr)
+      for i = 0, na - 1 do fb:MOVE(fr + 1 + i, argbase + i) end
+      fb:CALL(fr, na + 1, nr + 1)
+      for i = 0, nr - 1 do fb:MOVE(argbase + i, fr + i) end
+      vsp = vsp - na + nr
+    else
+      error("compiler: unhandled op " .. op)
+    end
+  end
+
+  if not dead then
+    if nres == 0 then fb:RETURN(0, 1) else fb:RETURN(base + vsp - nres, nres + 1) end
+  end
+  fb:RETURN(0, 1)
+  return fb
+end
+
+-- Compile one wasm function to a single Lua function (fast path). Errors via
+-- fb:build() if any jump exceeds Lua's 18-bit sBx range.
+function M.compile_func(mod, fidx)
+  return luabc.loadable(build_fb(mod, fidx))
+end
+
+-- Same as compile_func but relaxes too-far jumps through trampolines, so it can
+-- compile functions that overflow Lua's jump range. Same return contract.
+function M.compile_oversized(mod, fidx)
+  return luabc.loadable_relaxed(build_fb(mod, fidx))
+end
+
+-- ---- instantiation: compile every function, wire the instance --------------
+local function evalConst(inst, instrs)
+  local v
+  for _, ins in ipairs(instrs) do
+    local op = ins.op
+    if op == "i32.const" then v = runtime.to_u32(ins.v)
+    elseif op == "i64.const" then v = ins.v
+    elseif op == "f32.const" or op == "f64.const" then v = ins.v
+    elseif op == "global.get" then v = inst.globals[ins.x]
+    elseif op == "ref.func" then v = ins.func
+    elseif op == "ref.null" then v = nil
+    elseif op == "end" then break end
+  end
+  return v
+end
+
+function M.instantiate(module, imports)
+  imports = imports or {}
+  local loader = loadstring or load
+  local inst = { module = module }
+
+  if module.importedMem then
+    inst.memory = imports[module.importedMem.module][module.importedMem.name]
+  elseif module.memories[1] then
+    inst.memory = Memory.new(module.memories[1].min, module.memories[1].max)
+  else
+    inst.memory = Memory.new(0)
+  end
+
+  inst.funcs = {}
+  inst.globals = {}
+  inst.tables = {}
+  local ENV = runtime.make(inst)
+  inst.fallbacks = {} -- gi -> true for functions that fell back to the interpreter
+
+  -- A shared interpreter instance for the few functions too large to compile to
+  -- a single Lua function (jumps exceed Lua's 18-bit range). It reuses inst's
+  -- memory/globals/tables, and every call it makes routes back through
+  -- inst.funcs, so interpreted and compiled functions call each other freely.
+  local interp = require("interp")
+  local iinst = { module = module, memory = inst.memory, globals = inst.globals,
+                  tables = inst.tables, functions = {} }
+  local function delegate(gi)
+    return { type = functype_of(module, gi),
+             host = function(a) return { inst.funcs[gi]((table.unpack or unpack)(a)) } end }
+  end
+
+  for i = 1, module.numImportedFuncs do
+    local imp = module.importedFuncs[i]
+    local host = imports[imp.module] and imports[imp.module][imp.name]
+    if not host then error("missing import: " .. imp.module .. "." .. imp.name) end
+    local gi = i - 1
+    inst.funcs[gi] = function(...) return (table.unpack or unpack)(host({ ... }, inst) or {}) end
+    iinst.functions[gi] = delegate(gi)
+  end
+  -- defined functions: lazily compiled on first call; fall back to the shared
+  -- interpreter if compilation fails (too large / not yet supported).
+  for j = 1, #module.funcTypeIdx do
+    local gi = module.numImportedFuncs + (j - 1)
+    iinst.functions[gi] = delegate(gi)
+    inst.funcs[gi] = function(...)
+      local function via(compile) return loader(compile(module, j), "wasmfn#" .. gi)(ENV) end
+      local fn
+      if M._force_oversized then
+        local ok, f = pcall(via, M.compile_oversized); if ok then fn = f end
+      else
+        local ok, f = pcall(via, M.compile_func)
+        if ok then fn = f else
+          -- too large for a single Lua function: relax jumps via trampolines
+          local ok2, f2 = pcall(via, M.compile_oversized); if ok2 then fn = f2 end
+        end
+      end
+      if fn then
+        inst.funcs[gi] = fn
+      else
+        inst.fallbacks[gi] = true
+        iinst.functions[gi] = { type = functype_of(module, gi), code = module.codes[j] }
+        inst.funcs[gi] = function(...) return (table.unpack or unpack)(interp.run(iinst, gi, { ... })) end
+      end
+      return inst.funcs[gi](...)
+    end
+  end
+
+  for i = 1, #module.globals do
+    inst.globals[module.numImportedGlobals + (i - 1)] = evalConst(inst, module.globals[i].init)
+  end
+  for i = 1, #module.tables do inst.tables[i - 1] = {} end
+  for _, seg in ipairs(module.elements) do
+    if seg.mode == "active" then
+      local b = evalConst(inst, seg.offset); local tbl = inst.tables[seg.table or 0]
+      for k = 1, #seg.funcs do tbl[b + k - 1] = seg.funcs[k] end
+    end
+  end
+  for _, seg in ipairs(module.datas) do
+    if seg.mode == "active" then inst.memory:storestr(evalConst(inst, seg.offset), seg.bytes) end
+  end
+
+  function inst:call(name, ...)
+    local exp = module.exports[name]
+    if not exp or exp.kind ~= "func" then error("no exported function '" .. tostring(name) .. "'") end
+    local ftype = functype_of(module, exp.index)
+    local raw = { ... }
+    local args = {}
+    for i = 1, #ftype.params do args[i] = host_to_internal(ftype.params[i], raw[i]) end
+    local out = { self.funcs[exp.index]((table.unpack or unpack)(args)) }
+    local res = {}
+    for i = 1, #ftype.results do res[i] = internal_to_host(ftype.results[i], out[i]) end
+    return (table.unpack or unpack)(res)
+  end
+  inst.set_yield = require("interp").set_yield
+
+  if module.start ~= nil then inst.funcs[module.start]() end
+  return inst
+end
+
+M.runtime = runtime
 return M
 end
 preload['wasm'] = function(...)
--- Top-level façade for the pure-Lua WebAssembly interpreter.
+-- Top-level façade for the pure-Lua WebAssembly engine, with two execution
+-- modes:
+--   "interp"  (default, portable) — the tree-walking interpreter. Runs anywhere
+--             (lua5.4, Cobalt, ...) and yields to CC's event loop.
+--   "jit"     (Cobalt only)       — compile each function to Lua 5.1 bytecode and
+--             run it natively on Cobalt's VM (~7-13x). Falls back to "interp"
+--             automatically on VMs that can't load 5.1 bytecode.
+-- Both produce an instance with the same surface: inst:call(name, ...),
+-- inst.memory, inst.set_yield.
 local decoder = require("decoder")
 local interp = require("interp")
 
 local M = {}
 
+-- Cobalt is Lua 5.1 with bit32 — the only VM that loads our emitted bytecode.
+local function is_cobalt()
+  return _VERSION == "Lua 5.1" and rawget(_G, "bit32") ~= nil
+end
+M.is_cobalt = is_cobalt
+
 function M.load(bytes)
   return decoder.load(bytes)
 end
 
-function M.instantiate(module, imports)
+-- Instantiate a decoded module. opts.mode = "interp" (default) | "jit".
+function M.instantiate(module, imports, opts)
+  local mode = opts and opts.mode or "interp"
+  if (mode == "jit" or mode == "compile") and is_cobalt() then
+    return require("compiler").instantiate(module, imports)
+  end
   return interp.instantiate(module, imports)
 end
 
--- Register a yield hook called every `every` instructions (for CC's watchdog).
+-- Convenience: load + instantiate from raw bytes.
+function M.instantiate_bytes(bytes, imports, opts)
+  return M.instantiate(decoder.load(bytes), imports, opts)
+end
+
+-- Compile-once cache. precompile() builds the per-function bytecode chunks once;
+-- the returned object instantiates cheaply many times (fresh state, no recompile).
+-- Only meaningful in "jit" mode on Cobalt; in "interp" mode it's a thin wrapper.
+function M.precompile(bytes, opts)
+  local module = decoder.load(bytes)
+  if (opts and opts.mode or "jit") ~= "interp" and is_cobalt() then
+    local compiler = require("compiler")
+    return { module = module, jit = true,
+             instantiate = function(_, imports) return compiler.instantiate(module, imports) end }
+  end
+  return { module = module, jit = false,
+           instantiate = function(_, imports) return interp.instantiate(module, imports) end }
+end
+
 M.set_yield = interp.set_yield
 
 return M
@@ -1956,19 +2987,20 @@ local function read_bytes(path)
   local f = assert(io.open(path, "rb")); local d = f:read("*a"); f:close(); return d
 end
 
--- run a WASI command module from bytes; returns exit code
-function wasmcraft.run_wasi(bytes, prog_args, writefn)
+-- run a WASI command module from bytes; returns exit code.
+-- opts.mode = "interp" (default) | "jit" (compile to bytecode; Cobalt only, faster).
+function wasmcraft.run_wasi(bytes, prog_args, writefn, opts)
   local module = wasm.load(bytes)
   local host = wasi.make({ write = writefn or io.write, writeerr = writefn or io.write, args = prog_args or {} })
-  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host })
+  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host }, opts)
   local ok, err = pcall(function() inst:call("_start") end)
   if ok then return 0 end
   if type(err) == "table" and err[wasi.EXIT] then return err.code or 0 end
   error(err)
 end
 
-function wasmcraft.run_file(path, args)
-  return wasmcraft.run_wasi(read_bytes(path), args or { path })
+function wasmcraft.run_file(path, args, opts)
+  return wasmcraft.run_wasi(read_bytes(path), args or { path }, nil, opts)
 end
 
 -- A host filesystem backed by CC's fs API (for sql persistence in-game).
@@ -2011,10 +3043,15 @@ function wasmcraft.opendb(opts)
   })
 end
 
--- auto-run when invoked as a CC/Cobalt program with a filename argument
+-- auto-run when invoked as a CC/Cobalt program: wasmcraft [--jit] <module.wasm> [args]
 local _a = { ... }
+local _mode = "interp"
+while _a[1] == "--jit" or _a[1] == "--compile" or _a[1] == "--interp" do
+  if _a[1] ~= "--interp" then _mode = "jit" end
+  table.remove(_a, 1)
+end
 if _a[1] then
-  local code = wasmcraft.run_file(_a[1], _a)
+  local code = wasmcraft.run_file(_a[1], _a, { mode = _mode })
   if code ~= 0 then print("[module exited with code "..tostring(code).."]") end
 end
 

@@ -58,7 +58,7 @@ function M.run(program, opts)
     write = function(s) out[#out + 1] = s end,
     writeerr = function(s) out[#out + 1] = s end,
   })
-  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host })
+  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit" })
   local ok, err = pcall(function() inst:call("_start") end)
   if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then error(err) end
   pcall(function() hostfs.unlink(fname) end)
@@ -76,7 +76,7 @@ function M.runfile(path, opts)
     fs = hostfs, root = root, args = { "picat", path },
     write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
   })
-  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host })
+  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit" })
   local ok, err = pcall(function() inst:call("_start") end)
   if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then error(err) end
   return table.concat(out)

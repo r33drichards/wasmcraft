@@ -18,7 +18,7 @@ OUT=dist/wasmcraft.lua
   echo "  local f = preload[name]; if not f then error('module not bundled: '..name) end"
   echo "  local m = f(name); if m == nil then m = true end; loaded[name] = m; return m"
   echo "end"
-  for mod in leb int64 bit memory decoder wasi interp wasm sql; do
+  for mod in leb int64 bit memory decoder wasi interp luabc runtime compiler wasm sql; do
     echo "preload['$mod'] = function(...)"
     cat "src/$mod.lua"
     echo "end"
@@ -57,19 +57,20 @@ local function read_bytes(path)
   local f = assert(io.open(path, "rb")); local d = f:read("*a"); f:close(); return d
 end
 
--- run a WASI command module from bytes; returns exit code
-function wasmcraft.run_wasi(bytes, prog_args, writefn)
+-- run a WASI command module from bytes; returns exit code.
+-- opts.mode = "interp" (default) | "jit" (compile to bytecode; Cobalt only, faster).
+function wasmcraft.run_wasi(bytes, prog_args, writefn, opts)
   local module = wasm.load(bytes)
   local host = wasi.make({ write = writefn or io.write, writeerr = writefn or io.write, args = prog_args or {} })
-  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host })
+  local inst = wasm.instantiate(module, { wasi_snapshot_preview1 = host }, opts)
   local ok, err = pcall(function() inst:call("_start") end)
   if ok then return 0 end
   if type(err) == "table" and err[wasi.EXIT] then return err.code or 0 end
   error(err)
 end
 
-function wasmcraft.run_file(path, args)
-  return wasmcraft.run_wasi(read_bytes(path), args or { path })
+function wasmcraft.run_file(path, args, opts)
+  return wasmcraft.run_wasi(read_bytes(path), args or { path }, nil, opts)
 end
 
 -- A host filesystem backed by CC's fs API (for sql persistence in-game).
@@ -112,10 +113,15 @@ function wasmcraft.opendb(opts)
   })
 end
 
--- auto-run when invoked as a CC/Cobalt program with a filename argument
+-- auto-run when invoked as a CC/Cobalt program: wasmcraft [--jit] <module.wasm> [args]
 local _a = { ... }
+local _mode = "interp"
+while _a[1] == "--jit" or _a[1] == "--compile" or _a[1] == "--interp" do
+  if _a[1] ~= "--interp" then _mode = "jit" end
+  table.remove(_a, 1)
+end
 if _a[1] then
-  local code = wasmcraft.run_file(_a[1], _a)
+  local code = wasmcraft.run_file(_a[1], _a, { mode = _mode })
   if code ~= 0 then print("[module exited with code "..tostring(code).."]") end
 end
 
