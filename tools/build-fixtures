@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Regenerate every .wasm fixture from source: assemble .wat files, compile the C
+# programs and SQLite via `zig cc -target wasm32-wasi`. Run inside nix-shell, or
+# it will pull the toolchains via `nix shell`.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+export ZIG_GLOBAL_CACHE_DIR="$ROOT/.zig-cache" ZIG_LOCAL_CACHE_DIR="$ROOT/.zig-cache"
+
+SQLITE_URL="https://www.sqlite.org/2026/sqlite-amalgamation-3530200.zip"
+fetch_sqlite() {
+  if [ -f csrc/sqlite3.c ]; then return; fi
+  echo "== fetching SQLite amalgamation =="
+  curl -fsSL "$SQLITE_URL" -o vendor/sqlite-amalg.zip
+  ( cd vendor && unzip -oq sqlite-amalg.zip )
+  cp vendor/sqlite-amalgamation-3530200/sqlite3.c csrc/sqlite3.c
+  cp vendor/sqlite-amalgamation-3530200/sqlite3.h csrc/sqlite3.h
+}
+
+build() {
+  fetch_sqlite
+  echo "== assembling .wat fixtures =="
+  for w in test/wat/*.wat; do
+    wat2wasm "$w" -o "wasm/$(basename "${w%.wat}").wasm"
+  done
+  echo "== compiling C fixtures =="
+  zig cc -target wasm32-wasi -Os -o wasm/hello.wasm   csrc/hello.c
+  zig cc -target wasm32-wasi -Os -o wasm/compute.wasm csrc/compute.c
+  echo "== compiling SQLite (takes ~15s) =="
+  zig cc -target wasm32-wasi -O2 \
+    -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 \
+    -DSQLITE_DQS=0 -DSQLITE_TEMP_STORE=3 -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_WAL \
+    -o wasm/sqlite.wasm csrc/sqlite_demo.c csrc/sqlite3.c
+  echo "== done =="; ls -la wasm/
+}
+
+if command -v wat2wasm >/dev/null && command -v zig >/dev/null; then
+  build
+else
+  exec nix shell nixpkgs#wabt nixpkgs#zig --command bash -c "$(declare -f build); ZIG_GLOBAL_CACHE_DIR='$ROOT/.zig-cache' ZIG_LOCAL_CACHE_DIR='$ROOT/.zig-cache' build"
+fi

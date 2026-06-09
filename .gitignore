@@ -1,7 +1,18 @@
-node_modules/
-vendor/*.jar
+# JVM build artifacts
+tools/classes/
 *.class
-/tmp-*
+
+# nix
 result
 result-*
+
+# zig
 /.zig-cache/
+
+# Large regenerable vendored artifacts (fetch via tools/build-fixtures)
+vendor/*.zip
+vendor/sqlite-amalgamation-*/
+vendor/cobalt-src/
+vendor/Cobalt-0.7.3-sources.jar
+csrc/sqlite3.c
+csrc/sqlite3.h
