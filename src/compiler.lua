@@ -115,32 +115,46 @@ function M.compile_func(mod, fidx)
   for i = 1, nparams do locals_types[i - 1] = ftype.params[i] end
   for i = 1, #code.locals do locals_types[nparams + i - 1] = code.locals[i] end
   local nlocals = nparams + #code.locals
-  local renv = nlocals
-  local base = nlocals + 1
+  -- wasm locals live in a Lua table L (not registers) so functions with many
+  -- locals don't blow past Lua's ~250-register limit. Registers are only the
+  -- ENV, the L table, and the (shallow) operand stack.
+  local renv = nparams         -- ENV upvalue cached here
+  local Ltab = nparams + 1     -- locals table
+  local kscr = nparams + 2     -- scratch register for spilling out-of-range constants
+  local base = nparams + 3     -- operand stack base
   local nres = #ftype.results
 
   local fb = luabc.func(nparams, 1)
   fb:use(base)
   local kwrap = fb:knum(4294967296.0)
   local k0 = fb:knum(0.0)
+  -- Operand usable in an RK position. Lua's RK field is 9 bits, so a constant
+  -- index must be < 256; spill larger ones into kscr via LOADK.
+  local function kop(kidx)
+    if kidx < 256 then return RK(kidx) end
+    fb:LOADK(kscr, kidx); return kscr
+  end
   fb:GETUPVAL(renv, 0)
-  -- zero-init declared locals (typed: i64 -> {0,0})
+  fb:NEWTABLE(Ltab, 0, 0)
+  for r = 0, nparams - 1 do fb:SETTABLE(Ltab, kop(fb:knum(r)), r) end
   for r = nparams, nlocals - 1 do
     if locals_types[r] == "i64" then
-      fb:GETTABLE(r, renv, RK(fb:kstr("ZERO64")))
+      local z = base; fb:GETTABLE(z, renv, kop(fb:kstr("ZERO64"))); fb:SETTABLE(Ltab, kop(fb:knum(r)), z)
     else
-      fb:LOADK(r, k0)
+      fb:SETTABLE(Ltab, kop(fb:knum(r)), kop(k0))
     end
   end
 
   local vsp = 0
   local ctrl = {}
   local dead = false
+  local dead_depth = 0
+  local function go_dead() dead = true; dead_depth = #ctrl end
 
   local function helper(name, nargs, nresx)
     local argbase = base + vsp - nargs
     local f = base + vsp
-    fb:GETTABLE(f, renv, RK(fb:kstr(name)))
+    fb:GETTABLE(f, renv, kop(fb:kstr(name)))
     for i = 0, nargs - 1 do fb:MOVE(f + 1 + i, argbase + i) end
     fb:CALL(f, nargs + 1, nresx + 1)
     for i = 0, nresx - 1 do fb:MOVE(argbase + i, f + i) end
@@ -149,8 +163,8 @@ function M.compile_func(mod, fidx)
 
   local function ea_inline(addrreg, offset)
     if offset and offset ~= 0 then
-      fb:ARITH(OP.ADD, addrreg, addrreg, RK(fb:knum(offset)))
-      fb:ARITH(OP.MOD, addrreg, addrreg, RK(kwrap))
+      fb:ARITH(OP.ADD, addrreg, addrreg, kop(fb:knum(offset)))
+      fb:ARITH(OP.MOD, addrreg, addrreg, kop(kwrap))
     end
   end
 
@@ -181,30 +195,35 @@ function M.compile_func(mod, fidx)
   for _, ins in ipairs(code.body) do
     local op = ins.op
     if dead then
-      if op == "end" then do_end(); dead = false
-      elseif op == "else" then do_else(); dead = false
-      elseif op == "block" or op == "loop" or op == "if" then ctrl[#ctrl + 1] = { kind = "dead", height = vsp, results = 0, br_arity = 0 } end
-    elseif op == "local.get" then fb:MOVE(base + vsp, ins.x); vsp = vsp + 1
-    elseif op == "local.set" then vsp = vsp - 1; fb:MOVE(ins.x, base + vsp)
-    elseif op == "local.tee" then fb:MOVE(ins.x, base + vsp - 1)
+      if (op == "end" or op == "else") and #ctrl == dead_depth then
+        if op == "end" then do_end() else do_else() end
+        dead = false
+      elseif op == "block" or op == "loop" or op == "if" then
+        ctrl[#ctrl + 1] = { kind = "dead", height = vsp, results = 0, br_arity = 0 }
+      elseif op == "end" then
+        ctrl[#ctrl] = nil -- pop a nested placeholder inside the dead region
+      end
+    elseif op == "local.get" then fb:GETTABLE(base + vsp, Ltab, kop(fb:knum(ins.x))); vsp = vsp + 1
+    elseif op == "local.set" then vsp = vsp - 1; fb:SETTABLE(Ltab, kop(fb:knum(ins.x)), base + vsp)
+    elseif op == "local.tee" then fb:SETTABLE(Ltab, kop(fb:knum(ins.x)), base + vsp - 1)
     elseif op == "global.get" then
       local g = base + vsp
-      fb:GETTABLE(g, renv, RK(fb:kstr("globals"))); fb:GETTABLE(g, g, RK(fb:knum(ins.x)))
+      fb:GETTABLE(g, renv, kop(fb:kstr("globals"))); fb:GETTABLE(g, g, kop(fb:knum(ins.x)))
       vsp = vsp + 1
     elseif op == "global.set" then
       vsp = vsp - 1; local v = base + vsp; local t = base + vsp + 1
-      fb:GETTABLE(t, renv, RK(fb:kstr("globals"))); fb:SETTABLE(t, RK(fb:knum(ins.x)), v)
+      fb:GETTABLE(t, renv, kop(fb:kstr("globals"))); fb:SETTABLE(t, kop(fb:knum(ins.x)), v)
     elseif op == "drop" then vsp = vsp - 1
     elseif op == "nop" then -- nothing
     elseif op == "i32.const" then fb:LOADK(base + vsp, fb:knum(ins.v % 4294967296)); vsp = vsp + 1
     elseif op == "f32.const" or op == "f64.const" then fb:LOADK(base + vsp, fb:knum(ins.v)); vsp = vsp + 1
     elseif op == "i64.const" then
       local f = base + vsp
-      fb:GETTABLE(f, renv, RK(fb:kstr("mk64")))
+      fb:GETTABLE(f, renv, kop(fb:kstr("mk64")))
       fb:LOADK(f + 1, fb:knum(ins.v.h)); fb:LOADK(f + 2, fb:knum(ins.v.l))
       fb:CALL(f, 3, 2); vsp = vsp + 1
-    elseif op == "i32.add" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.ADD, a, a, b); fb:ARITH(OP.MOD, a, a, RK(kwrap)); vsp = vsp - 1
-    elseif op == "i32.sub" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.SUB, a, a, b); fb:ARITH(OP.MOD, a, a, RK(kwrap)); vsp = vsp - 1
+    elseif op == "i32.add" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.ADD, a, a, b); fb:ARITH(OP.MOD, a, a, kop(kwrap)); vsp = vsp - 1
+    elseif op == "i32.sub" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.SUB, a, a, b); fb:ARITH(OP.MOD, a, a, kop(kwrap)); vsp = vsp - 1
     elseif op == "f64.add" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.ADD, a, a, b); vsp = vsp - 1
     elseif op == "f64.sub" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.SUB, a, a, b); vsp = vsp - 1
     elseif op == "f64.mul" then local b = base + vsp - 1; local a = base + vsp - 2; fb:ARITH(OP.MUL, a, a, b); vsp = vsp - 1
@@ -219,7 +238,7 @@ function M.compile_func(mod, fidx)
     elseif op == "memory.copy" then helper("mem_copy", 3, 0)
     elseif op == "select" then
       local c = base + vsp - 1; local bb = base + vsp - 2; local aa = base + vsp - 3
-      fb:EQ(0, c, RK(k0)); local L = fb:label(); fb:jmp(L); fb:MOVE(aa, bb); fb:place(L); vsp = vsp - 2
+      fb:EQ(0, c, kop(k0)); local L = fb:label(); fb:jmp(L); fb:MOVE(aa, bb); fb:place(L); vsp = vsp - 2
     elseif op == "block" then
       local p, r = bt_arity(mod, ins.bt); assert(p == 0, "block with params")
       ctrl[#ctrl + 1] = { kind = "block", height = vsp, results = r, br_arity = r, exit = fb:label() }
@@ -231,26 +250,26 @@ function M.compile_func(mod, fidx)
       local p, r = bt_arity(mod, ins.bt); assert(p == 0, "if with params")
       vsp = vsp - 1; local cond = base + vsp
       local fr = { kind = "if", height = vsp, results = r, br_arity = r, exit = fb:label(), else_label = fb:label(), else_seen = false }
-      fb:EQ(1, cond, RK(k0)); fb:jmp(fr.else_label)
+      fb:EQ(1, cond, kop(k0)); fb:jmp(fr.else_label)
       ctrl[#ctrl + 1] = fr
     elseif op == "else" then do_else()
     elseif op == "end" then do_end()
-    elseif op == "br" then branch_to(ctrl[#ctrl - ins.label]); dead = true
+    elseif op == "br" then branch_to(ctrl[#ctrl - ins.label]); go_dead()
     elseif op == "br_if" then
       vsp = vsp - 1; local cond = base + vsp
       local fr = ctrl[#ctrl - ins.label]
       if fr.br_arity == 0 then
-        fb:EQ(0, cond, RK(k0)); fb:jmp(fr.exit)
+        fb:EQ(0, cond, kop(k0)); fb:jmp(fr.exit)
       else
         -- if cond==0 skip the branch; else move values + jump
-        fb:EQ(1, cond, RK(k0)); local L = fb:label(); fb:jmp(L)
+        fb:EQ(1, cond, kop(k0)); local L = fb:label(); fb:jmp(L)
         branch_to(fr); fb:place(L)
       end
     elseif op == "br_table" then
       vsp = vsp - 1; local idx = base + vsp
       for i = 1, #ins.targets do
         local fr = ctrl[#ctrl - ins.targets[i]]
-        fb:EQ(1, idx, RK(fb:knum(i - 1))); local L = fb:label(); fb:jmp(L)
+        fb:EQ(1, idx, kop(fb:knum(i - 1))); local L = fb:label(); fb:jmp(L)
         -- equal: branch; else fall to next compare
         local L2 = fb:label(); fb:jmp(L2) -- unconditional skip of branch block
         fb:place(L) -- target when idx==i-1
@@ -260,17 +279,17 @@ function M.compile_func(mod, fidx)
       end
       local frd = ctrl[#ctrl - ins.default]
       vsp = vsp + 1; branch_to(frd); vsp = vsp - 1
-      dead = true
+      go_dead()
     elseif op == "return" then
       if nres == 0 then fb:RETURN(0, 1) else fb:RETURN(base + vsp - nres, nres + 1) end
-      dead = true
+      go_dead()
     elseif op == "unreachable" then
-      local f = base + vsp; fb:GETTABLE(f, renv, RK(fb:kstr("__unreachable"))); fb:CALL(f, 1, 1); dead = true
+      local f = base + vsp; fb:GETTABLE(f, renv, kop(fb:kstr("__unreachable"))); fb:CALL(f, 1, 1); go_dead()
     elseif op == "call" then
       local ct = functype_of(mod, ins.func)
       local na = #ct.params; local nr = #ct.results
       local argbase = base + vsp - na; local fr = base + vsp
-      fb:GETTABLE(fr, renv, RK(fb:kstr("funcs"))); fb:GETTABLE(fr, fr, RK(fb:knum(ins.func)))
+      fb:GETTABLE(fr, renv, kop(fb:kstr("funcs"))); fb:GETTABLE(fr, fr, kop(fb:knum(ins.func)))
       for i = 0, na - 1 do fb:MOVE(fr + 1 + i, argbase + i) end
       fb:CALL(fr, na + 1, nr + 1)
       for i = 0, nr - 1 do fb:MOVE(argbase + i, fr + i) end
@@ -280,9 +299,9 @@ function M.compile_func(mod, fidx)
       local na = #ct.params; local nr = #ct.results
       vsp = vsp - 1; local idxr = base + vsp
       local argbase = base + vsp - na; local fr = base + vsp + 1; local tmp = base + vsp + 2
-      fb:GETTABLE(fr, renv, RK(fb:kstr("tables"))); fb:GETTABLE(fr, fr, RK(fb:knum(ins.table)))
+      fb:GETTABLE(fr, renv, kop(fb:kstr("tables"))); fb:GETTABLE(fr, fr, kop(fb:knum(ins.table)))
       fb:GETTABLE(fr, fr, idxr)
-      fb:GETTABLE(tmp, renv, RK(fb:kstr("funcs"))); fb:GETTABLE(fr, tmp, fr)
+      fb:GETTABLE(tmp, renv, kop(fb:kstr("funcs"))); fb:GETTABLE(fr, tmp, fr)
       for i = 0, na - 1 do fb:MOVE(fr + 1 + i, argbase + i) end
       fb:CALL(fr, na + 1, nr + 1)
       for i = 0, nr - 1 do fb:MOVE(argbase + i, fr + i) end
@@ -344,12 +363,15 @@ function M.instantiate(module, imports)
       return (table.unpack or unpack)(res or {})
     end
   end
-  -- defined functions: compile each to a closure
+  -- defined functions: lazily compiled on first call (big modules have many
+  -- functions that never run; compiling all of them up front would be wasteful).
   for j = 1, #module.funcTypeIdx do
     local gi = module.numImportedFuncs + (j - 1)
-    local chunk = M.compile_func(module, j)
-    local factory = assert(loader(chunk, "wasmfn#" .. gi))
-    inst.funcs[gi] = factory(ENV)
+    inst.funcs[gi] = function(...)
+      local fn = assert(loader(M.compile_func(module, j), "wasmfn#" .. gi))(ENV)
+      inst.funcs[gi] = fn
+      return fn(...)
+    end
   end
 
   for i = 1, #module.globals do

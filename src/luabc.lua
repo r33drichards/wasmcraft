@@ -42,6 +42,8 @@ function M.func(nparams, nups)
 end
 
 function FB:use(r) if r + 1 > self.maxstack then self.maxstack = r + 1 end end
+-- track a register operand that may be an RK-encoded constant (>=256 -> ignore)
+function FB:usek(r) if r < 256 and r + 1 > self.maxstack then self.maxstack = r + 1 end end
 
 function FB:knum(x)
   local key = "n:" .. tostring(x)
@@ -68,17 +70,17 @@ function FB:LOADBOOL(a, b, c) self:use(a); return self:_emit(iABC(OP.LOADBOOL, a
 function FB:LOADNIL(a, b) self:use(a); self:use(b); return self:_emit(iABC(OP.LOADNIL, a, b, 0)) end
 function FB:GETUPVAL(a, b) self:use(a); return self:_emit(iABC(OP.GETUPVAL, a, b, 0)) end
 function FB:GETGLOBAL(a, k) self:use(a); return self:_emit(iABx(OP.GETGLOBAL, a, k)) end
-function FB:GETTABLE(a, b, c) self:use(a); self:use(b); return self:_emit(iABC(OP.GETTABLE, a, b, c)) end
-function FB:SETTABLE(a, b, c) self:use(a); return self:_emit(iABC(OP.SETTABLE, a, b, c)) end
+function FB:GETTABLE(a, b, c) self:use(a); self:use(b); self:usek(c); return self:_emit(iABC(OP.GETTABLE, a, b, c)) end
+function FB:SETTABLE(a, b, c) self:use(a); self:usek(b); self:usek(c); return self:_emit(iABC(OP.SETTABLE, a, b, c)) end
 function FB:NEWTABLE(a, b, c) self:use(a); return self:_emit(iABC(OP.NEWTABLE, a, b, c)) end
-function FB:ARITH(op, a, b, c) self:use(a); return self:_emit(iABC(op, a, b, c)) end
+function FB:ARITH(op, a, b, c) self:use(a); self:usek(b); self:usek(c); return self:_emit(iABC(op, a, b, c)) end
 function FB:UNM(a, b) self:use(a); self:use(b); return self:_emit(iABC(OP.UNM, a, b, 0)) end
 function FB:CALL(a, b, c) self:use(a); return self:_emit(iABC(OP.CALL, a, b, c)) end
 function FB:RETURN(a, b) return self:_emit(iABC(OP.RETURN, a, b, 0)) end
 function FB:CLOSURE(a, bx) self:use(a); return self:_emit(iABx(OP.CLOSURE, a, bx)) end
-function FB:EQ(a, b, c) return self:_emit(iABC(OP.EQ, a, b, c)) end
-function FB:LT(a, b, c) return self:_emit(iABC(OP.LT, a, b, c)) end
-function FB:LE(a, b, c) return self:_emit(iABC(OP.LE, a, b, c)) end
+function FB:EQ(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.EQ, a, b, c)) end
+function FB:LT(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.LT, a, b, c)) end
+function FB:LE(a, b, c) self:usek(b); self:usek(c); return self:_emit(iABC(OP.LE, a, b, c)) end
 function FB:TEST(a, c) return self:_emit(iABC(OP.TEST, a, 0, c)) end
 
 -- labels & jumps
