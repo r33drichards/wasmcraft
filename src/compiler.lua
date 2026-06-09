@@ -351,26 +351,43 @@ function M.instantiate(module, imports)
   inst.globals = {}
   inst.tables = {}
   local ENV = runtime.make(inst)
+  inst.fallbacks = {} -- gi -> true for functions that fell back to the interpreter
 
-  -- imported functions wrapped to the uniform calling convention
+  -- A shared interpreter instance for the few functions too large to compile to
+  -- a single Lua function (jumps exceed Lua's 18-bit range). It reuses inst's
+  -- memory/globals/tables, and every call it makes routes back through
+  -- inst.funcs, so interpreted and compiled functions call each other freely.
+  local interp = require("interp")
+  local iinst = { module = module, memory = inst.memory, globals = inst.globals,
+                  tables = inst.tables, functions = {} }
+  local function delegate(gi)
+    return { type = functype_of(module, gi),
+             host = function(a) return { inst.funcs[gi]((table.unpack or unpack)(a)) } end }
+  end
+
   for i = 1, module.numImportedFuncs do
     local imp = module.importedFuncs[i]
     local host = imports[imp.module] and imports[imp.module][imp.name]
     if not host then error("missing import: " .. imp.module .. "." .. imp.name) end
-    local fi = i - 1
-    inst.funcs[fi] = function(...)
-      local res = host({ ... }, inst)
-      return (table.unpack or unpack)(res or {})
-    end
+    local gi = i - 1
+    inst.funcs[gi] = function(...) return (table.unpack or unpack)(host({ ... }, inst) or {}) end
+    iinst.functions[gi] = delegate(gi)
   end
-  -- defined functions: lazily compiled on first call (big modules have many
-  -- functions that never run; compiling all of them up front would be wasteful).
+  -- defined functions: lazily compiled on first call; fall back to the shared
+  -- interpreter if compilation fails (too large / not yet supported).
   for j = 1, #module.funcTypeIdx do
     local gi = module.numImportedFuncs + (j - 1)
+    iinst.functions[gi] = delegate(gi)
     inst.funcs[gi] = function(...)
-      local fn = assert(loader(M.compile_func(module, j), "wasmfn#" .. gi))(ENV)
-      inst.funcs[gi] = fn
-      return fn(...)
+      local ok, fn = pcall(function() return loader(M.compile_func(module, j), "wasmfn#" .. gi)(ENV) end)
+      if ok then
+        inst.funcs[gi] = fn
+      else
+        inst.fallbacks[gi] = true
+        iinst.functions[gi] = { type = functype_of(module, gi), code = module.codes[j] }
+        inst.funcs[gi] = function(...) return (table.unpack or unpack)(interp.run(iinst, gi, { ... })) end
+      end
+      return inst.funcs[gi](...)
     end
   end
 

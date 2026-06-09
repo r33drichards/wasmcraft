@@ -91,10 +91,13 @@ function FB:jmp(L) local pos = self:_emit(iAsBx(OP.JMP, 0, 0)); self.jumps[#self
 function FB:add_child(bytes) self.children[#self.children + 1] = bytes; return #self.children - 1 end
 
 function FB:build()
-  -- resolve jumps
+  -- resolve jumps; bail if any exceeds Lua's 18-bit sBx range (the function is
+  -- too large to compile to a single Lua function -> caller falls back to interp)
   for _, j in ipairs(self.jumps) do
     assert(j.label.target, "unresolved jump label")
-    self.code[j.pos] = iAsBx(OP.JMP, 0, j.label.target - j.pos - 1)
+    local sbx = j.label.target - j.pos - 1
+    if sbx > 131071 or sbx < -131071 then error("function too large: jump out of range") end
+    self.code[j.pos] = iAsBx(OP.JMP, 0, sbx)
   end
   local p = { lstr(nil), u32(0), u32(0), u8(self.nups), u8(self.nparams), u8(0), u8(self.maxstack), u32(#self.code) }
   for _, c in ipairs(self.code) do p[#p + 1] = c end

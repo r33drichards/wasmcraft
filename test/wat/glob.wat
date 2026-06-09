@@ -1,0 +1,11 @@
+(module
+ (memory 1)
+ (global $g (mut i32) (i32.const 100))
+ (func (export "test") (param i32) (result i32)
+   (global.set $g (i32.add (global.get $g) (local.get 0)))
+   (i32.store offset=4 (global.get $g) (i32.const 42))
+   (i32.load offset=4 (global.get $g)))
+ (func (export "offneg") (param i32) (result i32)
+   (i32.store offset=16 (local.get 0) (i32.const 7))
+   (i32.load offset=16 (local.get 0)))
+ (func (export "gget") (result i32) (global.get $g)))

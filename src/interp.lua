@@ -550,4 +550,9 @@ function M.instantiate(module, imports)
   return inst
 end
 
+-- Run a defined function by global index against an instance, returning the raw
+-- results array. Used by the compiler's hybrid instance to execute the few
+-- functions too large to compile, sharing the compiled instance's state.
+M.run = function(inst, funcIdx, args) return run(inst, funcIdx, args) end
+
 return M
