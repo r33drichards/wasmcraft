@@ -46,18 +46,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ github.event.inputs.version || 'v0.1.0' }}"
+          {
+            echo "Pure-Lua WebAssembly runtime for CC:Tweaked (Cobalt): interpreter + wasm->Lua-bytecode compiler, WASI, SQLite, Picat with warm rednet-served sessions."
+            echo
+            echo "In-game install:"
+            echo '```'
+            for f in picatd.lua pic.lua planner.lua sqlsh.lua; do
+              echo "wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$f ${f%.lua}"
+            done
+            echo '```'
+            echo "picat.wasm (5.3 MB) goes on a floppy on the daemon computer."
+          } > notes.md
           if ! gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" \
-              --title "wasmcraft $VERSION" \
-              --notes "Pure-Lua WebAssembly runtime for CC:Tweaked (Cobalt): interpreter + wasm->Lua-bytecode compiler, WASI, SQLite, Picat with warm rednet-served sessions.
-
-In-game install:
-\`\`\`
-wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/picatd.lua picatd
-wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/pic.lua pic
-wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/planner.lua planner
-wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/sqlsh.lua sqlsh
-\`\`\`
-picat.wasm (5.3 MB) goes on a floppy on the daemon computer."
+              --title "wasmcraft $VERSION" --notes-file notes.md
           fi
           gh release upload "$VERSION" out/* --repo "$GITHUB_REPOSITORY" --clobber
