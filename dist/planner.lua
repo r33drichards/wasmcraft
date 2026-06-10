@@ -251,6 +251,7 @@ local function local_solve()
     error("no way to run Picat", 0)
   end
   picat.modulePath = wasmpath
+  picat.mode = "transpile" -- explicit: source loads on every CC build (jit would error where bytecode is blocked)
   print("booting Picat locally + solving both plans (~30-60s)...")
   return picat.run(PROGRAM, { root = "." })
 end
@@ -258,6 +259,7 @@ end
 -- one combined run -> shared grid + two plans (ordered, free). Each plan keeps
 -- its movement path AND its mark events (when a goal is actually claimed) —
 -- a route may PASS OVER a goal it isn't allowed to claim yet (in-order mode).
+local solvedin -- seconds the solve took (parsed from the cached result)
 local function parse_both(out)
   local bounds, start, goals, gset = { x = 4, y = 4 }, { x = 0, y = 0 }, {}, {}
   local O, F = { path = {}, events = {} }, { path = {}, events = {} }
@@ -266,6 +268,8 @@ local function parse_both(out)
     if line == "PLAN ordered" then cur = O
     elseif line == "PLAN free" then cur = F
     else
+      local sv = line:match("^SOLVEDIN%s+(%d+)$")
+      if sv then solvedin = tonumber(sv) end
       local k, a, b = line:match("(%u+)%s+(%-?%d+)%s+(%-?%d+)")
       if k == "BOUNDS" then bounds = { x = tonumber(a), y = tonumber(b) }
       elseif k == "START" then start = { x = tonumber(a), y = tonumber(b) }
@@ -301,10 +305,13 @@ else
   else
     fwrite(STATE, "1")
   end
+  local t0 = os.clock()
   out = daemon_solve() or local_solve()
+  local solved_in = os.clock() - t0
+  out = out .. ("\nSOLVEDIN %d\n"):format(solved_in)
   fwrite(RESULT, out)
   fdel(STATE)
-  print("planner: solution cached to " .. RESULT)
+  print(("planner: solved in %ds; cached to %s"):format(solved_in, RESULT))
 end
 local A, B = parse_both(out)
 if #A.path == 0 or #B.path == 0 then
@@ -372,6 +379,10 @@ local function render_monitor(mon)
     mon.setBackgroundColor(C.black); mon.clear()
     text(ox1 + 1, 1, "near-first: " .. (#A.path - 1), C.yellow)
     text(ox2 + 1, 1, "planner: " .. (#B.path - 1), C.lime)
+    if solvedin then
+      local lbl = "solved in " .. solvedin .. "s"
+      text(W - #lbl, 1, lbl, C.lightGray)
+    end
     base(ox1, A); base(ox2, B)
     for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.white) end
     -- Animate over events. A goal only turns RED when the plan actually MARKS
