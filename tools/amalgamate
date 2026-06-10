@@ -39,8 +39,8 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit }
-wasmcraft.version = 4 -- bump to make cached copies on in-game computers self-refresh
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit, precompile_cache = wasm.precompile_cache }
+wasmcraft.version = 5 -- bump to make cached copies on in-game computers self-refresh
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a

@@ -3846,6 +3846,32 @@ function M.precompile(bytes, opts)
            instantiate = function(_, imports) return interp.instantiate(module, imports) end }
 end
 
+-- Eagerly compile EVERY defined function up front, returning a chunk_cache
+-- table for instantiate(): compilation happens at DEPLOY time, requests are
+-- served from the cache (functions that can't compile are marked "interp").
+-- mode = "transpile" (default) | "jit" (strict: errors where bytecode is blocked)
+function M.precompile_cache(module, mode)
+  mode = mode or "transpile"
+  local backend, fn1, fn2
+  if mode == "jit" or mode == "compile" then
+    if not M.can_jit() then
+      error('jit unavailable: this VM refuses Lua 5.1 bytecode. Use mode="transpile".', 0)
+    end
+    backend = require("compiler"); fn1, fn2 = backend.compile_func, backend.compile_oversized
+  else
+    backend = require("transpiler"); fn1, fn2 = backend.transpile_func, backend.transpile_oversized
+  end
+  local cache, compiled, fell_back = {}, 0, 0
+  for j = 1, #module.funcTypeIdx do
+    local gi = module.numImportedFuncs + (j - 1)
+    local ok, chunk = pcall(fn1, module, j)
+    if not ok then ok, chunk = pcall(fn2, module, j) end
+    if ok then cache[gi] = chunk; compiled = compiled + 1
+    else cache[gi] = "interp"; fell_back = fell_back + 1 end
+  end
+  return cache, compiled, fell_back
+end
+
 M.set_yield = interp.set_yield
 
 return M
@@ -4019,8 +4045,8 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit }
-wasmcraft.version = 4 -- bump to make cached copies on in-game computers self-refresh
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit, precompile_cache = wasm.precompile_cache }
+wasmcraft.version = 5 -- bump to make cached copies on in-game computers self-refresh
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a
