@@ -18,7 +18,7 @@ OUT=dist/wasmcraft.lua
   echo "  local f = preload[name]; if not f then error('module not bundled: '..name) end"
   echo "  local m = f(name); if m == nil then m = true end; loaded[name] = m; return m"
   echo "end"
-  for mod in leb int64 bit memory decoder wasi interp luabc runtime compiler wasm sql; do
+  for mod in leb int64 bit memory decoder wasi interp luabc runtime compiler transpiler wasm sql; do
     echo "preload['$mod'] = function(...)"
     cat "src/$mod.lua"
     echo "end"
@@ -40,7 +40,7 @@ local wasi = require("wasi")
 
 -- public surface
 wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit }
-wasmcraft.version = 3 -- bump to make cached copies on in-game computers self-refresh
+wasmcraft.version = 4 -- bump to make cached copies on in-game computers self-refresh
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a
@@ -109,7 +109,7 @@ function wasmcraft.opendb(opts)
     if d then root, path = (d == "" and "/" or d), n end
   end
   return wasmcraft.sql.open({
-    module = module, path = path,
+    module = module, path = path, mode = opts.mode,
     fs = opts.fs or wasmcraft.hostfs(root), root = root,
   })
 end
@@ -117,8 +117,12 @@ end
 -- auto-run when invoked as a CC/Cobalt program: wasmcraft [--jit] <module.wasm> [args]
 local _a = { ... }
 local _mode = "interp"
-while _a[1] == "--jit" or _a[1] == "--compile" or _a[1] == "--interp" do
-  if _a[1] ~= "--interp" then _mode = "jit" end
+while true do
+  if _a[1] == "--interp" then _mode = "interp"
+  elseif _a[1] == "--jit" or _a[1] == "--compile" then _mode = "jit"
+  elseif _a[1] == "--transpile" then _mode = "transpile"
+  elseif _a[1] == "--auto" then _mode = "auto"
+  else break end
   table.remove(_a, 1)
 end
 if _a[1] then

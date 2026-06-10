@@ -28,7 +28,7 @@ ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
 local function load_lib()
   return assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
 end
-local ENGINE_VERSION = 3
+local ENGINE_VERSION = 4
 local picat = load_lib()
 -- self-heal: ensure() keeps pre-existing files, so an old picat.lua/wasmcraft
 -- (without session support, or an outdated engine) may load. Refresh + reload.
@@ -48,12 +48,19 @@ picat.modulePath = find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
   "/Users/robertwendt/picat-cc/third_party/picat/emu/picat.wasm" }) or "disk/picat.wasm"
 
 local args = { ... }
+-- picatd --mode <interp|jit|transpile|auto>: engine mode for ALL sessions.
+-- EXPLICIT: default "jit" errors loudly on CC builds that refuse bytecode
+-- (CC:T >= 1.109) - choose --mode transpile there. No silent substitution.
+local dmode = "jit"
+for i = #args - 1, 1, -1 do
+  if args[i] == "--mode" then dmode = args[i + 1]; table.remove(args, i + 1); table.remove(args, i) end
+end
 -- picatd --install [name]: run on every boot via startup.lua. A daemon computer
 -- reboots when its chunk unloads or the server restarts, which kills the daemon
 -- and drops its rednet hostname; installing makes it come back by itself.
 if args[1] == "--install" and type(fs) == "table" then
   local h = fs.open("startup.lua", "w")
-  h.write('shell.run("picatd"' .. (args[2] and (', "' .. args[2] .. '"') or "") .. ')\n')
+  h.write('shell.run("picatd", "--mode", "' .. dmode .. '"' .. (args[2] and (', "' .. args[2] .. '"') or "") .. ')\n')
   h.close()
   print("picatd: installed to startup.lua — will start on every boot.")
   print("picatd: starting now...")
@@ -109,12 +116,6 @@ local function run_bench(mode, n)
     local f = assert(io.open(picat.modulePath, "rb")); local b = f:read("*a"); f:close()
     benchmod = wc.load(b)
   end
-  local note = ""
-  if mode == "jit" and wc.can_jit and not wc.can_jit() then
-    -- fail over, not through: run the leg interpreted and say so
-    mode = "interp"
-    note = " (jit unavailable: this CC build refuses Lua bytecode - ran interpreted)"
-  end
   local prog = ("main => printf(\"fib(%d)=%%w\\n\", fib(%d)).\n"):format(n, n) ..
     "table\nfib(0)=0.\nfib(1)=1.\nfib(F)=R, F>1 => R=fib(F-1)+fib(F-2).\n"
   local hostfs = wc.hostfs and wc.hostfs(".") or wc.wasi.io_hostfs(".")
@@ -125,6 +126,7 @@ local function run_bench(mode, n)
     write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
   })
   local inst = wc.instantiate(benchmod, { wasi_snapshot_preview1 = host }, { mode = mode })
+  local ranmode = inst.mode or mode
   local t0 = os.clock()
   local ok, err = pcall(function() inst:call("_start") end)
   local dt = os.clock() - t0
@@ -133,7 +135,7 @@ local function run_bench(mode, n)
     error(mode .. " run failed: " .. tostring(err))
   end
   local answer = table.concat(out):match("fib%(%d+%)=%d+") or "?"
-  return ("%s in %.1fs [%s]%s"):format(answer, dt, mode, note), dt
+  return ("%s in %.1fs [%s]"):format(answer, dt, ranmode), dt
 end
 
 local function handle(sess, msg, sname)
@@ -164,7 +166,7 @@ local function worker(sname, sess)
         if not sess.s and job.msg.action ~= "bench" then -- bench builds its own engines
           sess.state = "booting"
           dlog("picatd: booting session '" .. sname .. "'...")
-          sess.s = picat.session({ root = "." })
+          sess.s = picat.session({ root = ".", mode = dmode })
           dlog("picatd: session '" .. sname .. "' ready.")
         end
         if job.sender then
@@ -299,7 +301,7 @@ local function dashboard(mon)
     mon.setBackgroundColor(C.black); mon.clear()
     local up = os.clock() - started_at
     mon.setCursorPos(1, 1); mon.setTextColor(C.yellow)
-    mon.write(("picatd '%s'  up %dm%02ds  jobs %d"):format(name, up / 60, up % 60, total_jobs))
+    mon.write(("picatd '%s' [%s]  up %dm%02ds  jobs %d"):format(name, dmode, up / 60, up % 60, total_jobs))
     local y = 3
     local names = {}
     for sn in pairs(sessions) do names[#names + 1] = sn end
@@ -362,7 +364,7 @@ if not served then
   return
 end
 rednet.host(PROTO, name)
-print("picatd: serving as '" .. name .. "' on protocol '" .. PROTO .. "'.")
+print("picatd: serving as '" .. name .. "' on protocol '" .. PROTO .. "' (mode " .. dmode .. ").")
 
 -- ---- scheduler: like parallel, but coroutines can be added at runtime -------
 -- The receiver starts FIRST, then 'main' warms up as a normal (self-queued)

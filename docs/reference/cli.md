@@ -25,10 +25,17 @@ toolchains via `nix shell` when not on PATH.
 Produce `dist/wasmcraft.lua` — all of `src/` inlined into one file with a
 `require` shim, deployable to CC.
 
-### `run.lua` — `[lua|tools/cobalt] run.lua [--jit] <module.wasm> [args...]`
+### `run.lua` — `[lua|tools/cobalt] run.lua [mode] <module.wasm> [args...]`
 
-Run a WASI command module from the repo. `--jit` (alias `--compile`)
-compiles to bytecode on Cobalt; `--interp` forces the interpreter (default).
+Run a WASI command module from the repo. Mode flags are mutually exclusive
+(last one wins):
+
+- `--interp` — tree-walking interpreter (default; runs anywhere)
+- `--transpile` — compile to Lua *source* (text chunks load on every CC build)
+- `--jit` (alias `--compile`) — Lua 5.1 bytecode. STRICT: errors loudly on VMs
+  that refuse binary chunks (CC:Tweaked >= 1.109) instead of substituting
+- `--auto` — opt-in fastest-available: jit if loadable, else transpile, else
+  interp (the instance reports what ran via `inst.mode`)
 
 ## Deployable programs (`dist/`, run on a CC computer)
 
@@ -36,7 +43,7 @@ All of these self-bootstrap over HTTP on first run (interpreter bundle, and
 where needed `wq.wasm` / the picat library) — except `picat.wasm`, which is
 large and must be provided (typically a floppy at `/disk/picat.wasm`).
 
-### `wasmcraft [--jit] <module.wasm> [args]`
+### `wasmcraft [--interp|--transpile|--jit] <module.wasm> [args]`
 
 The bundle as a runner program. Loaded via `loadfile` instead, it returns
 the [library API](lua-api.md#bundle-extras-distwasmcraftlua).

@@ -32,6 +32,9 @@ local bundlePath = assert(find({ "wasmcraft", "dist/wasmcraft.lua", "wasmcraft.l
 local wasmcraft = assert(loadfile(bundlePath))()
 
 local M = { modulePath = "picat.wasm", _engine = wasmcraft, _module = nil, _cache = {} }
+-- engine mode is EXPLICIT: "jit" (errors loudly where bytecode is blocked),
+-- "transpile", "interp", or opt-in "auto". Set picat.mode or pass opts.mode.
+M.mode = "jit"
 
 local function load_module(opts)
   if opts.module then return wasmcraft.load(opts.module) end
@@ -58,7 +61,7 @@ function M.run(program, opts)
     write = function(s) out[#out + 1] = s end,
     writeerr = function(s) out[#out + 1] = s end,
   })
-  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit", chunk_cache = M._cache })
+  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = opts.mode or M.mode, chunk_cache = M._cache })
   local ok, err = pcall(function() inst:call("_start") end)
   if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then error(err) end
   pcall(function() hostfs.unlink(fname) end)
@@ -76,7 +79,7 @@ function M.runfile(path, opts)
     fs = hostfs, root = root, args = { "picat", path },
     write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
   })
-  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit", chunk_cache = M._cache })
+  local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = opts.mode or M.mode, chunk_cache = M._cache })
   local ok, err = pcall(function() inst:call("_start") end)
   if not ok and not (type(err) == "table" and err[wasmcraft.wasi.EXIT]) then error(err) end
   return table.concat(out)
@@ -105,7 +108,7 @@ function M.session(opts)
       fs = hostfs, root = root, args = { "picat" }, stdin = reader,
       write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
     })
-    local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = "jit", chunk_cache = M._cache })
+    local inst = wasmcraft.instantiate(module, { wasi_snapshot_preview1 = host }, { mode = opts.mode or M.mode, chunk_cache = M._cache })
     -- NB: no pcall here — Lua 5.1 forbids yielding across a pcall, and the reader
     -- yields. proc_exit (on halt) surfaces as a resume error handled below.
     local co = coroutine.create(function() inst:call("_start") end)

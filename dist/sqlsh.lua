@@ -40,8 +40,13 @@ assert(wqPath, "wq.wasm not found")
 local wasmcraft = assert(loadfile(bundlePath))()
 
 local args = { ... }
+-- --mode interp|jit|transpile|auto (explicit; default interp)
+local mode = "interp"
+for i = #args - 1, 1, -1 do
+  if args[i] == "--mode" then mode = args[i + 1]; table.remove(args, i + 1); table.remove(args, i) end
+end
 local dbfile = args[1] or "data.db"
-local db = wasmcraft.opendb{ modulePath = wqPath, path = dbfile }
+local db = wasmcraft.opendb{ modulePath = wqPath, path = dbfile, mode = mode }
 
 print("sqlsh — SQLite " .. db:version() .. " on a pure-Lua wasm interpreter")
 print("db: " .. dbfile .. "   (.help for commands, .exit to quit)")

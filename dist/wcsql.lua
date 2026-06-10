@@ -41,7 +41,7 @@ local M = { NULL = wasmcraft.sql.NULL, _engine = wasmcraft }
 function M.open(path, opts)
   opts = opts or {}
   return wasmcraft.opendb({
-    modulePath = wqPath, module = opts.module,
+    modulePath = wqPath, module = opts.module, mode = opts.mode,
     path = path or "data.db", root = opts.root, fs = opts.fs,
   })
 end

@@ -9,8 +9,12 @@ local wasi = require("wasi")
 
 local args = { ... }
 local mode = "interp"
-while args[1] == "--jit" or args[1] == "--compile" or args[1] == "--interp" do
-  if args[1] ~= "--interp" then mode = "jit" end
+while true do
+  if args[1] == "--interp" then mode = "interp"
+  elseif args[1] == "--jit" or args[1] == "--compile" then mode = "jit"
+  elseif args[1] == "--transpile" then mode = "transpile"
+  elseif args[1] == "--auto" then mode = "auto"
+  else break end
   table.remove(args, 1)
 end
 local path = args[1]

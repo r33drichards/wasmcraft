@@ -38,15 +38,44 @@ function M.load(bytes)
   return decoder.load(bytes)
 end
 
--- Instantiate a decoded module. opts.mode = "interp" (default) | "jit".
--- jit silently falls back to the interpreter on VMs that can't load 5.1
--- bytecode (non-Cobalt, or CC:T builds that prohibit binary chunks).
+-- Instantiate a decoded module. opts.mode:
+--   "interp"    (default) tree-walking interpreter, runs anywhere
+--   "transpile" wasm -> Lua SOURCE (text chunks load on every CC build)
+--   "jit"       Lua 5.1 bytecode. STRICT: errors loudly if this VM refuses
+--               binary chunks (CC:Tweaked >= 1.109) - no silent substitution
+--   "auto"      fastest available: jit if loadable, else transpile, else interp
+-- The returned instance carries inst.mode = what actually ran.
 function M.instantiate(module, imports, opts)
   local mode = opts and opts.mode or "interp"
-  if (mode == "jit" or mode == "compile") and M.can_jit() then
-    return require("compiler").instantiate(module, imports, opts)
+  local inst
+  if mode == "jit" or mode == "compile" then
+    if not M.can_jit() then
+      error('jit unavailable: this VM refuses Lua 5.1 bytecode (CC:Tweaked >= 1.109 blocks it). Use mode="transpile" or mode="auto".', 0)
+    end
+    inst = require("compiler").instantiate(module, imports, opts)
+    inst.mode = "jit"
+  elseif mode == "transpile" then
+    inst = require("transpiler").instantiate(module, imports, opts)
+    inst.mode = "transpile"
+  elseif mode == "auto" then
+    if M.can_jit() then
+      inst = require("compiler").instantiate(module, imports, opts)
+      inst.mode = "jit"
+    else
+      local ok, t = pcall(require, "transpiler")
+      if ok then
+        inst = t.instantiate(module, imports, opts)
+        inst.mode = "transpile"
+      else
+        inst = interp.instantiate(module, imports)
+        inst.mode = "interp"
+      end
+    end
+  else
+    inst = interp.instantiate(module, imports)
+    inst.mode = "interp"
   end
-  return interp.instantiate(module, imports)
+  return inst
 end
 
 -- Convenience: load + instantiate from raw bytes.

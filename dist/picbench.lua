@@ -4,13 +4,17 @@
 -- COMPILER (jit), times each on its own clock (rednet latency excluded), and
 -- this client reports both + the speedup. Jobs queue on the daemon's 'main'
 -- session, so a busy daemon finishes its current work first.
---   Usage: picbench [daemon] [N]      (default: first daemon found, fib(10))
+--   Usage: picbench [daemon] [N] [mode]   (default: first daemon, fib(10), jit)
+-- mode = the compiled leg (jit|transpile|auto), always compared vs interp.
+-- jit is STRICT: on a CC build that refuses bytecode it FAILS LOUDLY - rerun
+-- with mode transpile there.
 -- NOTE: the interpreted leg can take MANY minutes in-game. That gap is the result.
 local PROTO = "wcpicat"
 local args = { ... }
 local daemon_name = args[1]
-local N = tonumber(args[2] or (tonumber(args[1]) and args[1])) or 10
-if tonumber(args[1]) then daemon_name = nil end
+if tonumber(args[1]) then table.insert(args, 1, false); daemon_name = nil end
+local N = tonumber(args[2]) or 10
+local CMODE = args[3] or "jit"
 
 local opened = false
 if type(peripheral) == "table" and peripheral.find then
@@ -71,6 +75,12 @@ local function bench(mode, patience)
       elseif r.ok then return r.took, r.output
       else
         print(mode .. " FAILED: " .. tostring(r.output))
+        if tostring(r.output):find("jit unavailable") then
+          print("")
+          print("this server refuses Lua bytecode; benchmark the transpiler instead:")
+          print("  picbench " .. (daemon_name or "") .. " " .. N .. " transpile")
+          error("jit unavailable here", 0)
+        end
         if tostring(r.output):find("unknown action") then
           print("")
           print("this daemon runs an OLD picatd without the bench action. On it:")
@@ -86,8 +96,8 @@ local function bench(mode, patience)
   print(mode .. " timed out"); return nil
 end
 
-print(("\n-- fib(%d), compiled (jit) --"):format(N))
-local tj, oj = bench("jit", 1800)
+print(("\n-- fib(%d), compiled (%s) --"):format(N, CMODE))
+local tj, oj = bench(CMODE, 1800)
 if oj then print(oj) end
 
 print(("\n-- fib(%d), interpreted -- (slow; the daemon's dashboard shows it busy)"):format(N))
@@ -99,9 +109,8 @@ if tj and ti then
   print(("interpreted : %8.1fs"):format(ti))
   print(("compiled    : %8.1fs"):format(tj))
   print(("speedup     : %8.1fx"):format(ti / tj))
-  if oj and oj:find("jit unavailable") then
-    print("NOTE: this server blocks Lua bytecode, so BOTH legs ran interpreted -")
-    print("the speedup above is meaningless here. jit works on standalone Cobalt")
-    print("and emulators; on this server wasmcraft always uses the interpreter.")
+  if oj and oj:find("%[interp%]") then
+    print("NOTE: the compiled leg actually ran interpreted - the speedup above")
+    print("is meaningless. Pick an explicit mode: picbench <daemon> <N> transpile")
   end
 end

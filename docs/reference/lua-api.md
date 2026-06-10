@@ -20,7 +20,7 @@ Instantiate a decoded module.
 |---|---|---|
 | `module` | decoded module | from `wasm.load` |
 | `imports` | table | `imports[mod][field]` — host functions etc. A WASI host from `wasi.make` goes under key `wasi_snapshot_preview1` |
-| `opts.mode` | `"interp"` (default) \| `"jit"` | `"jit"` compiles to Lua 5.1 bytecode on Cobalt; on any other VM it silently falls back to the interpreter |
+| `opts.mode` | `"interp"` (default) \| `"transpile"` \| `"jit"` \| `"auto"` | `"transpile"` emits Lua *source* (loads on every CC build). `"jit"` is STRICT bytecode - it errors loudly where binary chunks are refused (probe: `wasmcraft.can_jit()`). `"auto"` opts into fastest-available (jit -> transpile -> interp); `inst.mode` reports what ran |
 | `opts.chunk_cache` | table | (jit) share compiled bytecode chunks across instantiations of the same module |
 
 ### `wasm.instantiate_bytes(bytes, imports, opts) → instance`
