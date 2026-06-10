@@ -17,6 +17,9 @@ vendor/Cobalt-0.7.3-sources.jar
 csrc/sqlite3.c
 csrc/sqlite3.h
 
+# mkdocs build output
+/site/
+
 # test scratch
 *.wasmcraft_sqltest.db
 .wasmcraft_sqltest.db

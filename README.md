@@ -1,12 +1,20 @@
-# wasmcraft — a WebAssembly interpreter in pure Lua, running on Cobalt
+# wasmcraft
 
-A from-scratch [WebAssembly](https://webassembly.github.io/spec/core/bikeshed/)
-interpreter written in plain Lua, designed to run on **[Cobalt](https://github.com/cc-tweaked/Cobalt)**
-— the Lua 5.1 VM that [CC:Tweaked](https://tweaked.cc) embeds in Minecraft.
+A WebAssembly engine written in pure Lua — small enough to drop onto a
+[CC:Tweaked](https://tweaked.cc/) computer in Minecraft, correct enough to run
+real C programs. SQLite and the [Picat](http://picat-lang.org/) constraint
+solver run in-game, compiled to wasm and executed by this engine.
 
-It decodes `.wasm` binary modules and executes them. The headline result:
-**SQLite 3.53.2, compiled to `wasm32-wasi`, runs a real `CREATE`/`INSERT`/`SELECT`
-through this interpreter on the actual Cobalt engine** — output identical to `wasmtime`.
+**Docs: <https://r33drichards.github.io/wasmcraft/>**
+
+```
+.wasm bytes ──► decoder ──► interp   (portable, runs anywhere)
+                      └───► compiler ──► Lua 5.1 bytecode  (Cobalt only, ~7-13x)
+```
+
+The headline result: **SQLite 3.53.2, compiled to `wasm32-wasi`, runs a real
+`CREATE`/`INSERT`/`SELECT` through this engine on the actual Cobalt VM** —
+output identical to `wasmtime`:
 
 ```
 $ tools/cobalt run.lua wasm/sqlite.wasm
@@ -23,134 +31,112 @@ carol | 8.0
 ## Why this is non-trivial on Cobalt
 
 Cobalt is **Lua 5.1**: every number is an IEEE double, there are no native
-integers, and no `&`/`|`/`<<` operators. The interpreter is built around four
-capabilities that were verified empirically on Cobalt 0.7.3 (see
+integers, and no `&`/`|`/`<<` operators. The engine is built on four
+capabilities verified empirically on Cobalt 0.7.3 (see
 `test/probe_cobalt.lua`):
 
 | Need | Solution |
 |------|----------|
 | i32 arithmetic & wrap | doubles hold 32-bit ints exactly; reduce mod 2³² |
 | i32 bitwise/shift/rotate | Cobalt's `bit32` library |
-| **i64** (no 53-bit-exact integers) | emulated as `{h, l}` two-word values (`src/int64.lua`) |
+| **i64** (no 64-bit-exact integers) | emulated as `{h, l}` two-word values (`src/int64.lua`) |
 | f32/f64, LEB128, IEEE decode, float reinterpret | `string.pack`/`string.unpack` |
 
-## Layout
+## Highlights
 
-```
-src/
-  leb.lua       byte cursor + LEB128 / primitive readers
-  int64.lua     64-bit integer emulation (two 32-bit words)
-  bit.lua       bit32 on Cobalt; native-operator shim on lua5.4 (bit_native.lua)
-  memory.lua    linear memory + typed/bulk access
-  decoder.lua   wasm binary → module tables (all standard sections)
-  interp.lua    instantiation + structured-control execution engine
-  wasi.lua      minimal WASI preview1 host
-  wasm.lua      load() / instantiate() façade
-run.lua         CLI: run a WASI command module
-tools/
-  cobalt        run a Lua script on the real Cobalt VM (Java harness)
-  test          run the suite on both lua5.4 and Cobalt
-  build-fixtures (re)build every .wasm from source (zig cc / wat2wasm)
-```
+- **Two execution modes.** A portable tree-walking interpreter, and a
+  compiler that emits Lua 5.1 bytecode which Cobalt (the Lua VM inside
+  CC:Tweaked) runs natively — roughly 7–13× faster. Mode is a flag;
+  the JIT falls back to the interpreter on other VMs automatically.
+- **WASI preview1 host** with a real filesystem: preopened dirs,
+  `path_open`/`fd_read`/`fd_write`/`fd_seek`/filestat/unlink, backed by host
+  files (or CC's `fs` API in-game). Enough to boot unmodified wasi-libc
+  command modules.
+- **SQLite in Minecraft.** `csrc/wq.c` wraps SQLite in a wasm reactor with a
+  generic query API; `dist/wcsql.lua` exposes it as a tiny Lua library with
+  on-disk persistence. `dist/sqlsh.lua` is an interactive SQL shell.
+- **Picat in Minecraft.** Run constraint/planning programs through the 5.3 MB
+  `picat.wasm` engine — one-shot, in a warm REPL session, or served to the
+  whole rednet network by a resident daemon (`picatd` + `pic` client).
+- **Differentially tested** against wasmtime, on both Lua 5.4 and the real
+  Cobalt VM.
 
-## Running
+## Quick start (standalone)
 
-Everything is driven through `nix` (toolchains: lua5.4, JDK, wabt, wasmtime, zig).
+Everything is driven through nix:
 
 ```sh
-nix-shell --run "tools/test"                      # full suite, both VMs
-nix-shell --run "tools/cobalt run.lua wasm/hello.wasm"
-nix-shell --run "tools/cobalt run.lua wasm/sqlite.wasm"
-nix-shell --run "tools/build-fixtures"            # rebuild .wasm from csrc/ + test/wat/
+# run a WASI module on Lua 5.4
+nix-shell --run "lua run.lua wasm/hello.wasm"
+
+# run it on Cobalt (the CC:Tweaked VM), JIT-compiled
+nix-shell --run "tools/cobalt run.lua --jit wasm/hello.wasm"
+
+# the SQLite demo
+nix-shell --run "tools/cobalt run.lua --jit wasm/sqlite.wasm"
+
+# full test suite (each test runs on lua5.4 AND Cobalt)
+nix-shell --run "tools/test"
 ```
 
-## Verification
+## Quick start (in ComputerCraft)
 
-Every fixture is **differentially tested against `wasmtime`** (the oracle) and
-run on **both lua5.4** (fast dev) **and Cobalt** (the real target). 105 assertions
-across LEB128, i32/i64/float ops & conversions, structured control, memory,
-`call`/`call_indirect`, WASI, and SQLite. Compiled C fixtures (`hello.c`,
-`compute.c` with malloc+qsort) and SQLite are produced with `zig cc -target wasm32-wasi`.
-
-## Running in-game (CC:Tweaked / real Cobalt)
-
-`tools/amalgamate` bundles the whole interpreter into one file, `dist/wasmcraft.lua`,
-with no `require`/`package.path` — drop it on a ComputerCraft computer and go.
-Requires **CC:Tweaked 1.100+** (for `string.pack`); `bit32` is built in.
-
-On an in-game Computer's terminal (HTTP is on by default):
+Copy `dist/sqlsh.lua` onto a computer with HTTP enabled and run it — it
+downloads the interpreter bundle and the SQLite reactor on first use:
 
 ```
-wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
-wget https://paste-production.up.railway.app/wc-hello.wasm hello.wasm
-wasmcraft hello.wasm
+sqlsh mydata.db
+sql> CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+sql> INSERT INTO t(name) VALUES('alice');
+sql> SELECT * FROM t;
 ```
-→ `hello from wasm in cobalt; sum(1..100)=5050; len=25`
 
-Other prebuilt modules: `wc-add.wasm` (exports `add`), `wc-compute.wasm`
-(malloc + qsort). The bundle reads the `.wasm` via CC's `fs` API.
-
-**SQLite in-game** works on a stock computer. A size-optimized build
-(`wasm/sqlite-min.wasm`, ~723 KB via `-Oz` + feature omits) fits the default
-1 MB disk alongside the bundle, and the interpreter yields to CC's event loop
-every 200k instructions so it doesn't trip the "too long without yielding"
-watchdog:
-
-```
-wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
-wget https://paste-production.up.railway.app/wc-sqlite.wasm sqlite.wasm
-wasmcraft sqlite.wasm
-```
-→ runs `CREATE`/`INSERT`/`SELECT`/aggregate, takes a few seconds. (The full
-4.4 MB `-O2` build, `wasm/sqlite.wasm`, needs a raised `computer_space_limit`.)
-
-## Generic SQL query API with file persistence
-
-`wq.wasm` is a SQLite *reactor* module (compiled from `csrc/wq.c` + the
-amalgamation) that exports `wq_open`/`wq_exec`/`wq_result`/… The `src/sql.lua`
-wrapper drives it and, crucially, persistence goes through a **real WASI
-filesystem** implemented in `src/wasi.lua` (`path_open`/`fd_read`/`fd_write`/
-`fd_seek`/`filestat`/`unlink` + a preopened root, dotfile locking, in-memory file
-images flushed whole on sync/close). The on-disk file is a genuine SQLite
-database — the native `sqlite3` CLI reads and writes the very same file.
+Or use SQLite from your own program:
 
 ```lua
-local wasmcraft = assert(loadfile("wasmcraft"))()        -- load the bundle
-local db = wasmcraft.opendb{ modulePath = "wq.wasm", path = "notes.db", root = "" }
-
-db:exec("CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT, n REAL)")
-db:exec("INSERT INTO notes(body,n) VALUES('hello',1.5),('world',2.0)")
-
-local r = db:query("SELECT id, body, n FROM notes WHERE n > 1.0 ORDER BY n DESC")
-for _, row in ipairs(r.rows) do print(row.id, row.body, row.n) end   -- keyed by name or index
--- r.columns = {"id","body","n"};  NULL fields == wasmcraft.sql.NULL
-
-db:close()   -- flushes notes.db to the host/computer disk
+local sql = require("wcsql")
+local db  = sql.open("data.db")              -- persists to the computer's disk
+db:exec("CREATE TABLE IF NOT EXISTS t(id INTEGER PRIMARY KEY, name TEXT)")
+db:exec("INSERT INTO t(name) VALUES('alice')")
+for _, row in ipairs(db:query("SELECT id, name FROM t").rows) do
+  print(row.id, row.name)
+end
+db:close()
 ```
 
-The same `notes.db` can then be opened by `sqlite3 notes.db` natively, and a
-later `opendb` of the same path sees the persisted rows. In-game, fetch the
-737 KB reactor and query a database stored on the computer:
+## Project layout
 
+| Path | What it is |
+|---|---|
+| `src/` | The engine: `decoder`, `interp`, `compiler` + `luabc`, `memory`, `int64`, `wasi`, `sql`, façade `wasm.lua` |
+| `dist/` | Deployable artifacts: amalgamated `wasmcraft.lua` bundle, `wcsql`, `sqlsh`, `picat`, `pirun`, `picatd`, `pic`, `planner` |
+| `csrc/` | C sources compiled to wasm fixtures (`zig cc -target wasm32-wasi`), incl. SQLite and the `wq` reactor |
+| `wasm/` | Prebuilt `.wasm` fixtures |
+| `test/` | Test suite (`*_test.lua`) + `.wat` fixture sources |
+| `tools/` | `cobalt` (run scripts on the real VM), `test`, `build-fixtures`, `amalgamate` |
+
+## Documentation
+
+Full docs are published at **<https://r33drichards.github.io/wasmcraft/>**.
+They live in `docs/` ([Diátaxis](https://diataxis.fr/)-organized) and build
+with MkDocs:
+
+```sh
+nix-shell -p python3Packages.mkdocs python3Packages.mkdocs-material --run "mkdocs serve"
 ```
-wget https://paste-production.up.railway.app/wasmcraft-bundle wasmcraft
-wget https://paste-production.up.railway.app/wc-wq.wasm wq.wasm
--- then in a Lua program: wasmcraft.opendb{ modulePath="wq.wasm", path="notes.db" }
+
+Start with the [getting-started tutorial](docs/tutorials/getting-started.md),
+or jump to the [Lua API reference](docs/reference/lua-api.md).
+
+## Development
+
+```sh
+nix-shell --run "tools/test"            # run the suite on lua5.4 + Cobalt
+nix-shell --run "tools/test sql"        # only tests matching "sql"
+tools/build-fixtures                    # regenerate wasm/ from test/wat + csrc
+tools/amalgamate                        # regenerate dist/wasmcraft.lua
 ```
 
-`root` selects the directory (host path for standalone, CC `fs` path in-game);
-the backend is auto-detected (`fs` API on CC, Lua `io` otherwise).
-
-## Coverage (honest scope)
-
-Implements the slice of the WASM spec that real LLVM/clang C output uses:
-MVP integer/float/parametric/variable/memory/control instructions; multi-value
-blocks; `call_indirect` with tables/elements; globals & data segments;
-sign-extension ops; saturating (`trunc_sat`) and all numeric conversions; bulk
-memory (`memory.copy`/`fill`). WASI preview1 is stubbed to the extent a
-`:memory:` SQLite needs (`fd_write`, `clock_time_get`, `environ_*`, …).
-
-**Out of scope** (documented, not silently skipped): SIMD `v128`, GC, exception
-handling, `memory64`, threads/atomics, tail calls. SQLite is compiled without
-these. Linear memory is byte-addressed for simplicity; a word-packed backend
-would cut memory use for larger workloads.
+The engine sticks to the Lua 5.1 subset Cobalt supports (plus `bit32`), so
+code that passes on Lua 5.4 locally must also pass on `tools/cobalt` before it
+counts.
