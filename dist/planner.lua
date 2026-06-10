@@ -1,6 +1,6 @@
 -- planner — Picat's best_plan, two ways, side by side on a CC monitor, looping.
--- LEFT: visit goals IN ORDER.  RIGHT: visit them in ANY order (shortest).
--- Same goals; the planner picks the cheaper order on the right, so it's shorter.
+-- LEFT: the naive strategy (A* to the nearest goal, then the next nearest).
+-- RIGHT: Picat's planner chooses the visiting order globally - much shorter.
 -- (after Hillel Wayne's "Planner programming blows my mind")
 --   Usage: planner [daemon]
 -- Solves via a picatd daemon on the network when one is reachable (fast, warm,
@@ -38,22 +38,29 @@ end
 -- Picat boots only once. Goals chosen so the in-order route is much longer.
 -- Goals are SOLID: the turtle can never enter a goal cell; it claims a goal by
 -- standing on any orthogonally adjacent cell. (goal_cell facts must match Goals)
+-- The Goals list is sorted by distance from start, so "ordered" mode IS the
+-- naive strategy: A* to the nearest goal, then the next nearest. The goals
+-- alternate sides at increasing radii — near-first ping-pongs across the map
+-- while the planner sweeps one side then the other.
 local PROGRAM = [[
 import planner.
 main =>
-  Origin={0,0}, Goals=[{4,4},{2,0},{0,3}],
-  printf("BOUNDS 4 4\n"), printf("START 0 0\n"),
+  Origin={0,0}, Goals=[{1,4},{5,1},{2,6},{6,3}],
+  printf("BOUNDS 7 7\n"), printf("START 0 0\n"),
   foreach({Gx,Gy} in Goals) printf("GOAL %w %w\n",Gx,Gy) end,
   best_plan({Origin,Goals,ordered}, P1),
   printf("PLAN ordered\n"), printf("PATH 0 0\n"), walk(Origin,P1),
   best_plan({Origin,Goals,free}, P2),
   printf("PLAN free\n"), printf("PATH 0 0\n"), walk(Origin,P2).
-goal_cell({4,4}). goal_cell({2,0}). goal_cell({0,3}).
+goal_cell({1,4}). goal_cell({5,1}). goal_cell({2,6}). goal_cell({6,3}).
 adjacent({X,Y},{Gx,Gy}) => D = abs(X-Gx)+abs(Y-Gy), D == 1.
 final({_Pos,Gs,_}) => Gs=[].
+heuristic({{X,Y},Gs,_}) = Cost =>
+  Ds = [abs(X-Gx)+abs(Y-Gy)-1 : {Gx,Gy} in Gs],
+  Cost = len(Gs) + max([0|Ds]).
 action(F,T,A,C) ?=>
   F={{X,Y},Gs,M}, member({Dx,Dy},[{-1,0},{1,0},{0,-1},{0,1}]),
-  Tx=X+Dx,Ty=Y+Dy, member(Tx,0..4),member(Ty,0..4),
+  Tx=X+Dx,Ty=Y+Dy, member(Tx,0..7),member(Ty,0..7),
   not goal_cell({Tx,Ty}),
   T={{Tx,Ty},Gs,M}, A={move,{Tx,Ty}}, C=1.
 action(F,T,A,C) ?=> F={Pos,[G|Rest],ordered}, adjacent(Pos,G), T={Pos,Rest,ordered}, A={mark,G}, C=1.
@@ -305,14 +312,14 @@ if #A.path == 0 or #B.path == 0 then
   fdel(RESULT) -- don't cache garbage
   return
 end
-print(string.format("in order: %d moves   shortest: %d moves", #A.path - 1, #B.path - 1))
+print(string.format("near-first: %d moves   planner: %d moves", #A.path - 1, #B.path - 1))
 
 -- a short problem/solution blurb shown under the grids (<=3 sentences)
 local BLURB = string.format(
   "Goal: from S, get NEXT TO every goal G in the fewest steps - goals are solid " ..
-  "blocks the turtle can't walk through. Left serves them in the order given " ..
-  "(%d moves); right lets Picat's planner pick the order (%d). " ..
-  "Choosing the order finds the shorter route.", #A.path - 1, #B.path - 1)
+  "blocks the turtle can't walk through. Left is the naive strategy, A* to the " ..
+  "nearest goal then the next nearest (%d moves); right lets Picat's planner " ..
+  "choose the visiting order globally (%d). Planning beats nearest-first.", #A.path - 1, #B.path - 1)
 
 local function wrap(text, width)
   local out, line = {}, ""
@@ -363,8 +370,8 @@ local function render_monitor(mon)
   local function text(x, y, s, col) mon.setBackgroundColor(C.black); mon.setTextColor(col); mon.setCursorPos(x, y); mon.write(s) end
   while true do
     mon.setBackgroundColor(C.black); mon.clear()
-    text(ox1 + 1, 1, "in order: " .. (#A.path - 1), C.yellow)
-    text(ox2 + 1, 1, "shortest: " .. (#B.path - 1), C.lime)
+    text(ox1 + 1, 1, "near-first: " .. (#A.path - 1), C.yellow)
+    text(ox2 + 1, 1, "planner: " .. (#B.path - 1), C.lime)
     base(ox1, A); base(ox2, B)
     for i, l in ipairs(blurb) do text(1, H - #blurb + i, l, C.white) end
     -- Animate over events. A goal only turns RED when the plan actually MARKS
@@ -435,6 +442,6 @@ if mon then
   render_monitor(mon)
 else
   print("NO MONITOR — drawing to terminal (computer must touch the monitor to use it).")
-  render_ascii(A, "in order"); render_ascii(B, "shortest")
+  render_ascii(A, "near-first"); render_ascii(B, "planner")
   print(BLURB)
 end
