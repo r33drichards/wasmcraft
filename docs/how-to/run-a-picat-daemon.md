@@ -12,8 +12,14 @@ You need a CC computer with a modem attached and `picat.wasm` reachable
 
 ```
 wget https://github.com/r33drichards/wasmcraft/releases/latest/download/picatd.lua picatd
-picatd --install [name]
+picatd --mode transpile --install [name]
 ```
+
+`--mode <interp|jit|transpile|auto>` picks the engine for every session and is
+EXPLICIT (default `jit`). On servers that refuse Lua bytecode (CC:Tweaked
+>= 1.109 — most modern servers) `jit` errors loudly at session boot: use
+`--mode transpile`, which compiles to Lua source at the same speed. The mode
+survives `--install` and shows on the dashboard header.
 
 (`--install` writes a `startup.lua` so the daemon relaunches after
 chunk-unload reboots; omit it for a one-off run.)

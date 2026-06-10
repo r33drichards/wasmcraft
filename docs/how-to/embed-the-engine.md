@@ -31,8 +31,12 @@ local inst = wasm.instantiate(module, {}, { mode = "interp" })
 print(inst:call("add", 2, 3))                         --> 5
 ```
 
-`mode = "jit"` compiles to Lua 5.1 bytecode on Cobalt and silently falls
-back to the interpreter elsewhere, so it is always safe to request.
+Modes are explicit contracts: `"interp"` (default) runs anywhere;
+`"transpile"` compiles to Lua *source*, which loads on every CC build;
+`"jit"` compiles to Lua 5.1 bytecode and **errors loudly** on VMs that
+refuse binary chunks (CC:Tweaked >= 1.109) — probe with `wasmcraft.can_jit()`.
+Opt-in `"auto"` picks the fastest available (jit -> transpile -> interp) and
+reports the choice via `inst.mode`.
 
 ## Supply imports
 

@@ -85,8 +85,11 @@ for library usage and SQLite. From a checkout, everything is driven through nix:
 # run a WASI module on Lua 5.4
 nix-shell --run "lua run.lua wasm/hello.wasm"
 
-# run it on Cobalt (the CC:Tweaked VM), JIT-compiled
+# run it on Cobalt (the CC:Tweaked VM), compiled to bytecode
 nix-shell --run "tools/cobalt run.lua --jit wasm/hello.wasm"
+
+# compiled to Lua SOURCE instead (works on CC:T >= 1.109, which bans bytecode)
+nix-shell --run "tools/cobalt run.lua --transpile wasm/hello.wasm"
 
 # the SQLite demo
 nix-shell --run "tools/cobalt run.lua --jit wasm/sqlite.wasm"

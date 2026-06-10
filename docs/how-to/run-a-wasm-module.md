@@ -11,15 +11,22 @@ built with `zig cc -target wasm32-wasi` or wasi-sdk) from the command line.
 # portable interpreter (works on any Lua)
 lua run.lua wasm/hello.wasm arg1 arg2
 
-# on Cobalt, JIT-compiled (~7-13x faster)
+# compiled to Lua source (loads everywhere, incl. CC:T >= 1.109)
+tools/cobalt run.lua --transpile wasm/hello.wasm arg1 arg2
+
+# compiled to Lua 5.1 bytecode (errors loudly where bytecode is refused)
 tools/cobalt run.lua --jit wasm/hello.wasm arg1 arg2
 ```
 
-Flags:
+Mode flags (mutually exclusive, last one wins):
 
-- `--jit` (alias `--compile`) — compile functions to Lua 5.1 bytecode.
-  Cobalt only; other VMs fall back to the interpreter automatically.
-- `--interp` — force the interpreter (the default).
+- `--interp` — the interpreter (default); runs on any Lua.
+- `--transpile` — compile functions to Lua *source*. Loads on every CC build
+  and on lua5.4; on a Picat workload it benchmarks at parity with bytecode.
+- `--jit` (alias `--compile`) — compile to Lua 5.1 bytecode. STRICT: errors
+  loudly on VMs that refuse binary chunks (CC:Tweaked >= 1.109).
+- `--auto` — opt-in fastest available: jit if loadable, else transpile, else
+  the interpreter.
 
 Program arguments after the module path are passed through as WASI argv,
 with the module path as `argv[0]`.
@@ -30,12 +37,13 @@ The amalgamated bundle doubles as a runner program. With `dist/wasmcraft.lua`
 on the computer as `wasmcraft`:
 
 ```
-wasmcraft --jit mymodule.wasm arg1 arg2
+wasmcraft --transpile mymodule.wasm arg1 arg2
 ```
 
-Use `--jit` in-game: Cobalt loads the emitted bytecode natively and the
-compiler injects yields at loop back-edges, so long runs don't trip CC's
-"too long without yielding" watchdog.
+Use `--transpile` in-game: CC:Tweaked >= 1.109 refuses to load bytecode, so
+`--jit` errors loudly on modern servers (check yours with the bctest probe or
+`wasmcraft.can_jit()`). Both compiled modes inject yields at loop back-edges,
+so long runs don't trip CC's "too long without yielding" watchdog.
 
 ## Exit codes
 

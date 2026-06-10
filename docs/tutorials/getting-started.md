@@ -59,12 +59,14 @@ For a module this small you won't feel the difference, so try something
 heavier — SQLite creating a table, inserting, and querying:
 
 ```sh
-time tools/cobalt run.lua wasm/sqlite.wasm        # interpreted
-time tools/cobalt run.lua --jit wasm/sqlite.wasm  # compiled, ~7-13x faster
+time tools/cobalt run.lua wasm/sqlite.wasm              # interpreted
+time tools/cobalt run.lua --jit wasm/sqlite.wasm        # bytecode, ~7-13x faster
+time tools/cobalt run.lua --transpile wasm/sqlite.wasm  # Lua source, same ballpark
 ```
 
-The `--jit` flag is safe everywhere: on VMs that can't load Lua 5.1 bytecode
-(like Lua 5.4) it silently falls back to the interpreter.
+Modes are explicit: `--jit` errors loudly on VMs that refuse Lua 5.1 bytecode
+(Lua 5.4, CC:Tweaked >= 1.109) — use `--transpile` there (source loads
+everywhere), or opt into `--auto` to pick the fastest available.
 
 ## 5. Run the test suite
 
