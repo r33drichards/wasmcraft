@@ -4,14 +4,13 @@ name: release
 # release assets. The dist scripts bootstrap themselves from
 # .../releases/latest/download/<asset>, so updating the release updates what
 # in-game computers fetch.
+# Releases are IMMUTABLE: cut a NEW version for each release (no asset
+# clobbering). releases/latest/download/<asset> follows the newest release.
 on:
-  push:
-    branches: [master]
   workflow_dispatch:
     inputs:
       version:
-        description: "release tag (vX.Y.Z)"
-        default: "v0.1.0"
+        description: "new release tag (vX.Y.Z) - must not already exist"
         required: true
 
 permissions:
@@ -45,7 +44,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ github.event.inputs.version || 'v0.1.0' }}"
+          VERSION="${{ github.event.inputs.version }}"
           {
             echo "Pure-Lua WebAssembly runtime for CC:Tweaked (Cobalt): interpreter + wasm->Lua-bytecode compiler, WASI, SQLite, Picat with warm rednet-served sessions."
             echo
@@ -57,8 +56,9 @@ jobs:
             echo '```'
             echo "picat.wasm (5.3 MB) goes on a floppy on the daemon computer."
           } > notes.md
-          if ! gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" \
-              --title "wasmcraft $VERSION" --notes-file notes.md
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $VERSION already exists - releases are immutable, pick a new version" >&2
+            exit 1
           fi
-          gh release upload "$VERSION" out/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --title "wasmcraft $VERSION" --notes-file notes.md out/*
