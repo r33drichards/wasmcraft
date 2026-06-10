@@ -69,7 +69,18 @@ local function bench(mode, patience)
     elseif s == id and type(r) == "table" and r.id == mid then
       if r.status then print("(" .. tostring(r.status) .. ")"); deadline = os.clock() + 300
       elseif r.ok then return r.took, r.output
-      else print(mode .. " FAILED: " .. tostring(r.output)); return nil end
+      else
+        print(mode .. " FAILED: " .. tostring(r.output))
+        if tostring(r.output):find("unknown action") then
+          print("")
+          print("this daemon runs an OLD picatd without the bench action. On it:")
+          print("  rm picatd")
+          print("  wget https://github.com/r33drichards/wasmcraft/releases/latest/download/picatd.lua picatd")
+          print("  reboot")
+          error("daemon outdated", 0)
+        end
+        return nil
+      end
     end
   end
   print(mode .. " timed out"); return nil
@@ -88,4 +99,9 @@ if tj and ti then
   print(("interpreted : %8.1fs"):format(ti))
   print(("compiled    : %8.1fs"):format(tj))
   print(("speedup     : %8.1fx"):format(ti / tj))
+  if oj and oj:find("jit unavailable") then
+    print("NOTE: this server blocks Lua bytecode, so BOTH legs ran interpreted -")
+    print("the speedup above is meaningless here. jit works on standalone Cobalt")
+    print("and emulators; on this server wasmcraft always uses the interpreter.")
+  end
 end

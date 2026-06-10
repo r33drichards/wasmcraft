@@ -109,8 +109,11 @@ local function run_bench(mode, n)
     local f = assert(io.open(picat.modulePath, "rb")); local b = f:read("*a"); f:close()
     benchmod = wc.load(b)
   end
+  local note = ""
   if mode == "jit" and wc.can_jit and not wc.can_jit() then
-    return "jit unavailable: this CC build refuses to load Lua bytecode (CC:T >= 1.109?)"
+    -- fail over, not through: run the leg interpreted and say so
+    mode = "interp"
+    note = " (jit unavailable: this CC build refuses Lua bytecode - ran interpreted)"
   end
   local prog = ("main => printf(\"fib(%d)=%%w\\n\", fib(%d)).\n"):format(n, n) ..
     "table\nfib(0)=0.\nfib(1)=1.\nfib(F)=R, F>1 => R=fib(F-1)+fib(F-2).\n"
@@ -130,7 +133,7 @@ local function run_bench(mode, n)
     error(mode .. " run failed: " .. tostring(err))
   end
   local answer = table.concat(out):match("fib%(%d+%)=%d+") or "?"
-  return ("%s in %.1fs [%s]"):format(answer, dt, mode), dt
+  return ("%s in %.1fs [%s]%s"):format(answer, dt, mode, note), dt
 end
 
 local function handle(sess, msg, sname)
