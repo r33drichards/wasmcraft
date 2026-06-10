@@ -2804,14 +2804,32 @@ local function is_cobalt()
 end
 M.is_cobalt = is_cobalt
 
+-- Some CC:Tweaked builds (>= 1.109.0) refuse to load binary chunks entirely.
+-- Probe once with a minimal valid 5.1 chunk ("return 42") so jit mode can fall
+-- back to the interpreter instead of crashing mid-instantiate.
+local BCPROBE = "\27\76\117\97\81\0\1\4\4\4\8\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\2\2\2\0\0\0\1\0\0\0\30\0\0\1\1\0\0\0\3\0\0\0\0\0\0\69\64\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+local can_jit_cached
+function M.can_jit()
+  if can_jit_cached == nil then
+    if not is_cobalt() then can_jit_cached = false
+    else
+      local ok, f = pcall(loadstring or load, BCPROBE)
+      can_jit_cached = ok and type(f) == "function" and select(2, pcall(f)) == 42
+    end
+  end
+  return can_jit_cached
+end
+
 function M.load(bytes)
   return decoder.load(bytes)
 end
 
 -- Instantiate a decoded module. opts.mode = "interp" (default) | "jit".
+-- jit silently falls back to the interpreter on VMs that can't load 5.1
+-- bytecode (non-Cobalt, or CC:T builds that prohibit binary chunks).
 function M.instantiate(module, imports, opts)
   local mode = opts and opts.mode or "interp"
-  if (mode == "jit" or mode == "compile") and is_cobalt() then
+  if (mode == "jit" or mode == "compile") and M.can_jit() then
     return require("compiler").instantiate(module, imports, opts)
   end
   return interp.instantiate(module, imports)
@@ -2827,7 +2845,7 @@ end
 -- Only meaningful in "jit" mode on Cobalt; in "interp" mode it's a thin wrapper.
 function M.precompile(bytes, opts)
   local module = decoder.load(bytes)
-  if (opts and opts.mode or "jit") ~= "interp" and is_cobalt() then
+  if (opts and opts.mode or "jit") ~= "interp" and M.can_jit() then
     local compiler = require("compiler")
     return { module = module, jit = true,
              instantiate = function(_, imports) return compiler.instantiate(module, imports) end }
@@ -3008,8 +3026,8 @@ local wasm = require("wasm")
 local wasi = require("wasi")
 
 -- public surface
-wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield }
-wasmcraft.version = 2 -- bump to make cached copies on in-game computers self-refresh
+wasmcraft = { load = wasm.load, instantiate = wasm.instantiate, wasi = wasi, sql = require("sql"), set_yield = wasm.set_yield, can_jit = wasm.can_jit }
+wasmcraft.version = 3 -- bump to make cached copies on in-game computers self-refresh
 
 -- Under CC:Tweaked, yield to the event loop periodically so long runs (SQLite)
 -- don't trip the "too long without yielding" watchdog. queueEvent/pullEvent of a

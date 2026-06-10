@@ -28,7 +28,7 @@ ensure("wasmcraft", BUNDLE_URL); ensure("picat.lua", PICATLIB_URL)
 local function load_lib()
   return assert(loadfile(find({ "picat.lua", "dist/picat.lua" }) or error("picat.lua missing")))()
 end
-local ENGINE_VERSION = 2
+local ENGINE_VERSION = 3
 local picat = load_lib()
 -- self-heal: ensure() keeps pre-existing files, so an old picat.lua/wasmcraft
 -- (without session support, or an outdated engine) may load. Refresh + reload.
@@ -99,8 +99,45 @@ local function respond(sender, reply, id)
   if sender then rednet.send(sender, reply, PROTO) end
 end
 
+-- benchmark: one full end-to-end Picat run (engine boot + fib(N)) in the given
+-- engine mode, timed here on the daemon so rednet/queue latency isn't counted.
+-- Used by the picbench client; runs as a normal queued job on its session.
+local benchmod
+local function run_bench(mode, n)
+  local wc = assert(picat._engine, "picat lib lacks _engine")
+  if not benchmod then
+    local f = assert(io.open(picat.modulePath, "rb")); local b = f:read("*a"); f:close()
+    benchmod = wc.load(b)
+  end
+  if mode == "jit" and wc.can_jit and not wc.can_jit() then
+    return "jit unavailable: this CC build refuses to load Lua bytecode (CC:T >= 1.109?)"
+  end
+  local prog = ("main => printf(\"fib(%d)=%%w\\n\", fib(%d)).\n"):format(n, n) ..
+    "table\nfib(0)=0.\nfib(1)=1.\nfib(F)=R, F>1 => R=fib(F-1)+fib(F-2).\n"
+  local hostfs = wc.hostfs and wc.hostfs(".") or wc.wasi.io_hostfs(".")
+  hostfs.write("_bench.pi", prog)
+  local out = {}
+  local host = wc.wasi.make({
+    fs = hostfs, root = ".", args = { "picat", "_bench.pi" },
+    write = function(s) out[#out + 1] = s end, writeerr = function(s) out[#out + 1] = s end,
+  })
+  local inst = wc.instantiate(benchmod, { wasi_snapshot_preview1 = host }, { mode = mode })
+  local t0 = os.clock()
+  local ok, err = pcall(function() inst:call("_start") end)
+  local dt = os.clock() - t0
+  pcall(function() hostfs.unlink("_bench.pi") end)
+  if not ok and not (type(err) == "table" and err[(wc.wasi).EXIT]) then
+    error(mode .. " run failed: " .. tostring(err))
+  end
+  local answer = table.concat(out):match("fib%(%d+%)=%d+") or "?"
+  return ("%s in %.1fs [%s]"):format(answer, dt, mode), dt
+end
+
 local function handle(sess, msg, sname)
   if msg.action == "reset" then sess.s:reset(); return { ok = true, output = "reset" }
+  elseif msg.action == "bench" then
+    local ok, out, dt = pcall(run_bench, msg.mode or "jit", tonumber(msg.n) or 10)
+    return { ok = ok, output = ok and out or tostring(out), took = dt }
   elseif msg.action == "run" then
     -- per-session temp file: sessions share the fs root, and interleaved runs
     -- must not clobber each other's program file
@@ -121,7 +158,7 @@ local function worker(sname, sess)
         os.pullEvent("wcpicat_work")
       else
         local job = table.remove(sess.queue, 1)
-        if not sess.s then
+        if not sess.s and job.msg.action ~= "bench" then -- bench builds its own engines
           sess.state = "booting"
           dlog("picatd: booting session '" .. sname .. "'...")
           sess.s = picat.session({ root = "." })
