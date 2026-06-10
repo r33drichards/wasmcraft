@@ -1407,10 +1407,8 @@ WebAssembly inside the pure-Lua engine.</p>
 <p>You need a CC:Tweaked computer on a server with the HTTP API enabled
 (<code>http.enabled=true</code>, the default in single-player).</p>
 <h2 id="1-get-sqlsh-onto-the-computer">1. Get sqlsh onto the computer<a class="headerlink" href="#1-get-sqlsh-onto-the-computer" title="Permanent link">&para;</a></h2>
-<p>Copy <code>dist/sqlsh.lua</code> onto the computer as <code>sqlsh</code>. Any method works —
-<code>pastebin get</code>, <code>wget</code>, or dropping the file into the computer's folder in
-your save. For example, if you host the file somewhere reachable:</p>
-<div class="highlight"><pre><span></span><code>wget &lt;your-url&gt;/sqlsh.lua sqlsh
+<p>Fetch it straight from the GitHub release:</p>
+<div class="highlight"><pre><span></span><code>wget https://github.com/r33drichards/wasmcraft/releases/latest/download/sqlsh.lua sqlsh
 </code></pre></div>
 <h2 id="2-first-run-it-bootstraps-itself">2. First run — it bootstraps itself<a class="headerlink" href="#2-first-run-it-bootstraps-itself" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>sqlsh

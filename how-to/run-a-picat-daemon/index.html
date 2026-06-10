@@ -1384,10 +1384,12 @@ with no boot cost and no local <code>picat.wasm</code>.</p>
 <h2 id="set-up-the-server">Set up the server<a class="headerlink" href="#set-up-the-server" title="Permanent link">&para;</a></h2>
 <p>You need a CC computer with a modem attached and <code>picat.wasm</code> reachable
 (typically a floppy at <code>/disk/picat.wasm</code> — see
-<a href="../run-picat/">Run Picat programs</a>). Copy <code>dist/picatd.lua</code> onto it as
-<code>picatd</code> and run:</p>
-<div class="highlight"><pre><span></span><code>picatd [name]
+<a href="../run-picat/">Run Picat programs</a>). Install and run:</p>
+<div class="highlight"><pre><span></span><code>wget https://github.com/r33drichards/wasmcraft/releases/latest/download/picatd.lua picatd
+picatd --install [name]
 </code></pre></div>
+<p>(<code>--install</code> writes a <code>startup.lua</code> so the daemon relaunches after
+chunk-unload reboots; omit it for a one-off run.)</p>
 <p><code>name</code> defaults to the computer's label (else <code>"picat"</code>). The daemon:</p>
 <ul>
 <li>fetches the interpreter bundle and picat library on first run, and
@@ -1400,8 +1402,9 @@ with no boot cost and no local <code>picat.wasm</code>.</p>
 <p>Leave it running. Label the computer (<code>label set solver1</code>) so clients can
 find it by name.</p>
 <h2 id="use-it-from-a-client">Use it from a client<a class="headerlink" href="#use-it-from-a-client" title="Permanent link">&para;</a></h2>
-<p>Copy <code>dist/pic.lua</code> onto any computer with a modem (a wireless pocket
-computer works great) as <code>pic</code>:</p>
+<p>On any computer with a modem (a wireless pocket computer works great):</p>
+<div class="highlight"><pre><span></span><code>wget https://github.com/r33drichards/wasmcraft/releases/latest/download/pic.lua pic
+</code></pre></div>
 <div class="highlight"><pre><span></span><code>pic solver1 myprogram.pi          run a program file
 pic solver1 -e &quot;X=2+3, println(X).&quot;   run a raw goal
 pic solver1 -i                    interactive remote Picat&gt; shell

@@ -1418,8 +1418,8 @@ LuaJIT are not supported — they lack <code>string.pack</code>.</p>
 <h2 id="option-1-single-file-recommended">Option 1 — single file (recommended)<a class="headerlink" href="#option-1-single-file-recommended" title="Permanent link">&para;</a></h2>
 <p>Everything ships in one amalgamated file. Download it and the SQLite
 reactor (only needed if you want the database API):</p>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSLO<span class="w"> </span>https://raw.githubusercontent.com/r33drichards/wasmcraft/master/dist/wasmcraft.lua
-curl<span class="w"> </span>-fsSLO<span class="w"> </span>https://raw.githubusercontent.com/r33drichards/wasmcraft/master/wasm/wq.wasm
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSLO<span class="w"> </span>https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua
+curl<span class="w"> </span>-fsSLO<span class="w"> </span>https://github.com/r33drichards/wasmcraft/releases/latest/download/wq.wasm
 </code></pre></div>
 <p>Use it as a library:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">local</span><span class="w"> </span><span class="nv">wasmcraft</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">assert</span><span class="p">(</span><span class="nb">loadfile</span><span class="p">(</span><span class="s2">&quot;wasmcraft.lua&quot;</span><span class="p">))()</span>

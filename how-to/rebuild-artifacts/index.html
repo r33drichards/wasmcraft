@@ -652,10 +652,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#publish-optional" class="md-nav__link">
+  <a href="#publish" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Publish (optional)
+        Publish
       
     </span>
   </a>
@@ -1314,10 +1314,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#publish-optional" class="md-nav__link">
+  <a href="#publish" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Publish (optional)
+        Publish
       
     </span>
   </a>
@@ -1398,13 +1398,19 @@ has no <code>package.path</code>). Notes:</p>
   the end of the runner section in <code>tools/amalgamate</code>) so self-healing
   loaders like <code>picatd</code> know to refresh.</li>
 </ul>
-<h2 id="publish-optional">Publish (optional)<a class="headerlink" href="#publish-optional" title="Permanent link">&para;</a></h2>
-<p>The CC-side loaders fetch from a paste store; overwrite the slots to ship a
-new build:</p>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span>--data-binary<span class="w"> </span>@dist/wasmcraft.lua<span class="w"> </span>https://paste-production.up.railway.app/wasmcraft-bundle
-curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span>--data-binary<span class="w"> </span>@wasm/wq.wasm<span class="w">      </span>https://paste-production.up.railway.app/wc-wq.wasm
-curl<span class="w"> </span>-X<span class="w"> </span>PUT<span class="w"> </span>--data-binary<span class="w"> </span>@dist/picat.lua<span class="w">    </span>https://paste-production.up.railway.app/wc-picat.lua
+<h2 id="publish">Publish<a class="headerlink" href="#publish" title="Permanent link">&para;</a></h2>
+<p>Distribution is GitHub release assets: the <code>release</code> workflow
+(<code>.github/workflows/release.yml</code>) packages <code>dist/*</code> plus the wasm binaries and
+uploads them to the <code>v0.1.0</code> release on every push to <code>master</code>, so</p>
+<div class="highlight"><pre><span></span><code>https://github.com/r33drichards/wasmcraft/releases/latest/download/&lt;asset&gt;
 </code></pre></div>
+<p>always serves current master (that's what the CC-side loaders fetch). Shipping
+a new build is just <code>git push</code>. To cut a frozen version instead:</p>
+<div class="highlight"><pre><span></span><code>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>release.yml<span class="w"> </span>-f<span class="w"> </span><span class="nv">version</span><span class="o">=</span>v0.2.0
+</code></pre></div>
+<p>The new tag becomes <code>latest</code>; old tags stay pinned forever. Assets:
+<code>wasmcraft.lua</code> (bundle), <code>picat.lua</code>, <code>picatd.lua</code>, <code>pic.lua</code>, <code>planner.lua</code>,
+<code>pirun.lua</code>, <code>sqlsh.lua</code>, <code>wcsql.lua</code>, <code>picat.wasm</code>, <code>wq.wasm</code>, <code>SHA256SUMS</code>.</p>
 <h2 id="verify">Verify<a class="headerlink" href="#verify" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>nix-shell<span class="w"> </span>--run<span class="w"> </span><span class="s2">&quot;tools/test&quot;</span>
 tools/cobalt<span class="w"> </span>dist/wasmcraft.lua<span class="w"> </span>--jit<span class="w"> </span>wasm/hello.wasm<span class="w">   </span><span class="c1"># bundle smoke test</span>
