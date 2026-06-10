@@ -25,8 +25,8 @@ Everything ships in one amalgamated file. Download it and the SQLite
 reactor (only needed if you want the database API):
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/r33drichards/wasmcraft/master/dist/wasmcraft.lua
-curl -fsSLO https://raw.githubusercontent.com/r33drichards/wasmcraft/master/wasm/wq.wasm
+curl -fsSLO https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua
+curl -fsSLO https://github.com/r33drichards/wasmcraft/releases/latest/download/wq.wasm
 ```
 
 Use it as a library:

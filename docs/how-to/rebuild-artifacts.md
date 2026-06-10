@@ -51,16 +51,26 @@ has no `package.path`). Notes:
   the end of the runner section in `tools/amalgamate`) so self-healing
   loaders like `picatd` know to refresh.
 
-## Publish (optional)
+## Publish
 
-The CC-side loaders fetch from a paste store; overwrite the slots to ship a
-new build:
+Distribution is GitHub release assets: the `release` workflow
+(`.github/workflows/release.yml`) packages `dist/*` plus the wasm binaries and
+uploads them to the `v0.1.0` release on every push to `master`, so
+
+```
+https://github.com/r33drichards/wasmcraft/releases/latest/download/<asset>
+```
+
+always serves current master (that's what the CC-side loaders fetch). Shipping
+a new build is just `git push`. To cut a frozen version instead:
 
 ```sh
-curl -X PUT --data-binary @dist/wasmcraft.lua https://paste-production.up.railway.app/wasmcraft-bundle
-curl -X PUT --data-binary @wasm/wq.wasm      https://paste-production.up.railway.app/wc-wq.wasm
-curl -X PUT --data-binary @dist/picat.lua    https://paste-production.up.railway.app/wc-picat.lua
+gh workflow run release.yml -f version=v0.2.0
 ```
+
+The new tag becomes `latest`; old tags stay pinned forever. Assets:
+`wasmcraft.lua` (bundle), `picat.lua`, `picatd.lua`, `pic.lua`, `planner.lua`,
+`pirun.lua`, `sqlsh.lua`, `wcsql.lua`, `picat.wasm`, `wq.wasm`, `SHA256SUMS`.
 
 ## Verify
 

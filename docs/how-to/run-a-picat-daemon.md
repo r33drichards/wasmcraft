@@ -8,12 +8,15 @@ with no boot cost and no local `picat.wasm`.
 
 You need a CC computer with a modem attached and `picat.wasm` reachable
 (typically a floppy at `/disk/picat.wasm` — see
-[Run Picat programs](run-picat.md)). Copy `dist/picatd.lua` onto it as
-`picatd` and run:
+[Run Picat programs](run-picat.md)). Install and run:
 
 ```
-picatd [name]
+wget https://github.com/r33drichards/wasmcraft/releases/latest/download/picatd.lua picatd
+picatd --install [name]
 ```
+
+(`--install` writes a `startup.lua` so the daemon relaunches after
+chunk-unload reboots; omit it for a one-off run.)
 
 `name` defaults to the computer's label (else `"picat"`). The daemon:
 
@@ -29,8 +32,11 @@ find it by name.
 
 ## Use it from a client
 
-Copy `dist/pic.lua` onto any computer with a modem (a wireless pocket
-computer works great) as `pic`:
+On any computer with a modem (a wireless pocket computer works great):
+
+```
+wget https://github.com/r33drichards/wasmcraft/releases/latest/download/pic.lua pic
+```
 
 ```
 pic solver1 myprogram.pi          run a program file

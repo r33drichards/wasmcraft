@@ -74,7 +74,7 @@ clients of its public API:
 No repo needed — wasmcraft is a single pure-Lua file. On any Lua 5.3/5.4:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/r33drichards/wasmcraft/master/dist/wasmcraft.lua
+curl -fsSLO https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua
 lua wasmcraft.lua hello.wasm
 ```
 

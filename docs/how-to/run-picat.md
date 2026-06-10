@@ -10,7 +10,7 @@ Put it where the loaders look:
 
 - In ComputerCraft: on a floppy disk, so it mounts at `/disk/picat.wasm`
   (a floppy holds it; computer storage may not). Get it from
-  <https://tinyurl.com/2cladfgs>.
+  <https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.wasm>.
 - Standalone: `picat.wasm` or `wasm/picat.wasm` in the working directory,
   or set `picat.modulePath` explicitly.
 

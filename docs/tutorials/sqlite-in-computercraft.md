@@ -10,12 +10,10 @@ You need a CC:Tweaked computer on a server with the HTTP API enabled
 
 ## 1. Get sqlsh onto the computer
 
-Copy `dist/sqlsh.lua` onto the computer as `sqlsh`. Any method works —
-`pastebin get`, `wget`, or dropping the file into the computer's folder in
-your save. For example, if you host the file somewhere reachable:
+Fetch it straight from the GitHub release:
 
 ```
-wget <your-url>/sqlsh.lua sqlsh
+wget https://github.com/r33drichards/wasmcraft/releases/latest/download/sqlsh.lua sqlsh
 ```
 
 ## 2. First run — it bootstraps itself
