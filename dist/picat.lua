@@ -11,7 +11,7 @@
 -- file on the WASI filesystem, runs the engine, and returns its stdout.
 -- The interpreter bundle is auto-fetched on CC; picat.wasm must be on disk
 -- (it is large and engine-specific, so set picat.modulePath if not "picat.wasm").
-local BUNDLE_URL = "https://paste-production.up.railway.app/wasmcraft-bundle"
+local BUNDLE_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
 
 local function ensure(file, url)
   if type(fs) == "table" and fs.open and not fs.exists(file) then

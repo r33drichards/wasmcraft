@@ -7,8 +7,8 @@
 --
 -- In CC:Tweaked it downloads its two dependencies (the interpreter bundle and
 -- the SQLite reactor) on first run. Standalone it looks for them on disk.
-local BUNDLE_URL = "https://paste-production.up.railway.app/wasmcraft-bundle"
-local WQ_URL     = "https://paste-production.up.railway.app/wc-wq.wasm"
+local BUNDLE_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
+local WQ_URL     = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wq.wasm"
 
 local function ensure(file, url)
   if type(fs) == "table" and fs.open then

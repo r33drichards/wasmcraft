@@ -2,9 +2,9 @@
 --   Usage:  pirun [program.pi]        (no arg → built-in planner demo)
 -- Auto-downloads the interpreter bundle + picat library. The 5.3 MB Picat engine
 -- (picat.wasm) must be reachable on disk — typically a floppy at /disk/picat.wasm
--- (get it from https://tinyurl.com/2cladfgs). Runs in jit (compiled) mode.
-local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
-local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
+-- (get it from https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.wasm). Runs in jit (compiled) mode.
+local BUNDLE_URL   = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
+local PICATLIB_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.lua"
 
 local function ensure(file, url)
   if type(fs) == "table" and fs.open and not fs.exists(file) then
@@ -26,7 +26,7 @@ local wasmpath = find({ "disk/picat.wasm", "picat.wasm", "wasm/picat.wasm",
 if not wasmpath then
   print("picat.wasm (5.3 MB) not found.")
   print("Put it on a floppy disk (mounts at /disk/picat.wasm) — get it from:")
-  print("  https://tinyurl.com/2cladfgs")
+  print("  https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.wasm")
   return
 end
 picat.modulePath = wasmpath

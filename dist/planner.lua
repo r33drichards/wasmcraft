@@ -6,8 +6,8 @@
 -- Solves via a picatd daemon on the network when one is reachable (fast, warm,
 -- and this computer needs NO picat.wasm) — else boots Picat locally (needs
 -- picat.wasm, e.g. on a floppy at /disk/).
-local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
-local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
+local BUNDLE_URL   = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
+local PICATLIB_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.lua"
 -- Durability: 'planner --install' re-runs on every boot. A finished solve is
 -- cached to .planner_result, so after a reboot (chunk unload) the animation
 -- resumes instantly; an interrupted solve restarts FROM THE BEGINNING (there is
@@ -246,7 +246,7 @@ local function local_solve()
   if not wasmpath then
     print("No picatd daemon on the network AND no local picat.wasm.")
     print("Either start a daemon somewhere ('picatd --install' on a computer with")
-    print("the engine), or put picat.wasm (https://tinyurl.com/2cladfgs) on a")
+    print("the engine), or put picat.wasm (https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.wasm) on a")
     print("floppy here (/disk/picat.wasm).")
     error("no way to run Picat", 0)
   end

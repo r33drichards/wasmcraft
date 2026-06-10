@@ -11,8 +11,8 @@
 -- Replies: { ok=bool, output=str, id=<echoed> }; interim { status="..."} notes
 -- (booting / queued at position N) are sent while a job waits. session defaults
 -- to "main", which is pre-booted and warmed at startup.
-local BUNDLE_URL   = "https://paste-production.up.railway.app/wasmcraft-bundle"
-local PICATLIB_URL = "https://paste-production.up.railway.app/wc-picat.lua"
+local BUNDLE_URL   = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
+local PICATLIB_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/picat.lua"
 local PROTO = "wcpicat"
 
 local function ensure(file, url)

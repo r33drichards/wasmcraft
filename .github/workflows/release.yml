@@ -1,0 +1,63 @@
+name: release
+
+# Package the in-game programs + wasm binaries and publish them as GitHub
+# release assets. The dist scripts bootstrap themselves from
+# .../releases/latest/download/<asset>, so updating the release updates what
+# in-game computers fetch.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "release tag (vX.Y.Z)"
+        default: "v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: package
+        run: |
+          mkdir -p out
+          # in-game programs / libraries
+          cp dist/wasmcraft.lua out/wasmcraft.lua   # the engine bundle (interp+jit)
+          cp dist/picat.lua     out/picat.lua       # picat library (sessions)
+          cp dist/picatd.lua    out/picatd.lua      # picat daemon
+          cp dist/pic.lua       out/pic.lua         # daemon client / shell
+          cp dist/planner.lua   out/planner.lua     # planner monitor demo
+          cp dist/pirun.lua     out/pirun.lua       # one-shot picat runner
+          cp dist/sqlsh.lua     out/sqlsh.lua       # sqlite shell
+          cp dist/wcsql.lua     out/wcsql.lua       # sqlite library
+          # wasm binaries
+          cp wasm/picat.wasm    out/picat.wasm      # Picat 3.9 (wasm32-wasi)
+          cp wasm/wq.wasm       out/wq.wasm         # SQLite 3.53 query engine
+          (cd out && sha256sum * > SHA256SUMS)
+          ls -la out
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ github.event.inputs.version || 'v0.1.0' }}"
+          if ! gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" \
+              --title "wasmcraft $VERSION" \
+              --notes "Pure-Lua WebAssembly runtime for CC:Tweaked (Cobalt): interpreter + wasm->Lua-bytecode compiler, WASI, SQLite, Picat with warm rednet-served sessions.
+
+In-game install:
+\`\`\`
+wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/picatd.lua picatd
+wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/pic.lua pic
+wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/planner.lua planner
+wget https://github.com/$GITHUB_REPOSITORY/releases/latest/download/sqlsh.lua sqlsh
+\`\`\`
+picat.wasm (5.3 MB) goes on a floppy on the daemon computer."
+          fi
+          gh release upload "$VERSION" out/* --repo "$GITHUB_REPOSITORY" --clobber
