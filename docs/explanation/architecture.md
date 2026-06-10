@@ -318,19 +318,112 @@ local function iABC(op, a, b, c) return u32(op + a * 64 + c * 16384 + b * 838860
 local HEADER = string.char(0x1b, 0x4c, 0x75, 0x61, 0x51, 0, 1, 4, 4, 4, 8, 0)
 ```
 
-One real-world wrinkle: Lua's `JMP` offset field (`sBx`) is 18 bits, and
-SQLite contains functions big enough to exceed it. `build()` detects the
-overflow; a relaxation pass then reroutes too-far jumps through trampoline
-`JMP`s spliced into dead-code slots (positions shift as trampolines are
-inserted, so it iterates to a fixed point).
+Each compiled function is wrapped in a tiny factory proto —
+`function(ENV) return <the function> end` — so a chunk is self-contained:
+`loadstring(chunk)(ENV)` yields the wasm function with its environment
+bound as the upvalue.
 
-Compilation is also **lazy and per-function**: each function compiles on
-its first call, and one that still can't be encoded falls back to a shared
-interpreter instance — registered in the same `inst.funcs` table, so
-compiled and interpreted functions call each other freely and the rest of
-the module stays fast. The optional `chunk_cache` records compiled chunks
-(and `"interp"` markers) so repeat instantiations of the same module skip
-codegen entirely.
+### Trampolines: when SQLite outgrows Lua's jump range
+
+Lua 5.1 has exactly **one** jump instruction, and its offset lives in the
+18-bit `sBx` field — a reach of ±131,071 instructions. Wasm branches have
+no such limit, and SQLite's amalgamation contains functions (the VDBE
+dispatch loop, the parser) whose compiled bodies are longer than that: a
+`br` from deep inside to the function's `end` simply cannot be encoded as
+one `JMP`. Unlike a real ISA, Lua bytecode has no long-jump form to fall
+back on.
+
+The plain build refuses such a function outright:
+
+```lua
+-- src/luabc.lua — build()
+local sbx = j.label.target - j.pos - 1
+if sbx > 131071 or sbx < -131071 then
+  error("function too large: jump out of range")
+end
+```
+
+The compiler catches that error and retries with a relaxed build
+(`compile_func` → `compile_oversized`), which reroutes each too-far jump
+through **trampolines** — intermediate `JMP`s that each hop part of the
+distance:
+
+```
+src ──JMP──► trampoline ──JMP──► trampoline ──JMP──► target
+   ≤131k        ≤131k               ≤131k
+```
+
+Two problems make this more interesting than it sounds.
+
+**Where can a trampoline live?** It's an instruction spliced into the
+middle of a function body — if control ever *fell through* into it, it
+would teleport execution somewhere wild. The only safe slots are dead
+code. So during normal emission the compiler marks **anchors**: positions
+immediately after an unconditional control transfer, which fall-through
+can never reach:
+
+```lua
+-- src/luabc.lua — called after every br / br_table / return / unreachable.
+-- Code there is never reached by fall-through, so build_relaxed() may
+-- splice trampoline JMPs in.
+function FB:anchor() self.anchors[#self.anchors + 1] = #self.code + 1 end
+```
+
+Big functions have lots of unconditional branches, so anchors are dense
+enough in practice that a hop toward any target can always find one.
+
+**Insertion moves everything.** Splicing a trampoline shifts every
+instruction after it, which changes jump distances — possibly pushing
+previously-fine jumps out of range, which demands more trampolines, which
+shift positions again. So relaxation iterates to a fixed point:
+
+```lua
+-- src/luabc.lua — build_relaxed()
+for pass = 1, 500 do
+  recompute()                                  -- positions incl. current tramps
+  added = false
+  for _, j in ipairs(self.jumps) do
+    local srcpos = newpos(j.pos)
+    if not (j.imm and ok_range(srcpos, j.imm)) then
+      j.imm = route1(srcpos, { label = j.label })  -- may create a trampoline
+    end
+  end
+  for _, rec in ipairs(allTramps) do           -- trampolines re-route too:
+    if not ok_range(trampPos(rec), rec.imm) then -- a hop can itself be too far
+      rec.imm = route1(trampPos(rec), rec.finalT) -- and chain through another
+    end
+  end
+  if not added then break end
+end
+```
+
+Three details keep this converging instead of oscillating:
+
+- **Memoization** — one trampoline per (anchor, label); every jump heading
+  for the same target routes through the same hop instead of spawning its
+  own.
+- **Stickiness** — a jump that already has an in-range immediate target
+  keeps it; only jumps actually knocked out of range re-route.
+- **Margin** — routing uses a safe reach of 130,000 rather than the hard
+  131,071, so the small position shifts from later insertions don't
+  invalidate earlier routing decisions.
+
+The output is the same proto with identical semantics — some branches just
+take two or three hops, costing one `JMP` dispatch each on those paths.
+Only the relaxed path pays any of this; normally-sized functions never run
+it.
+
+### Lazy, per-function compilation
+
+Compilation is per-function and happens on first call. The fallback chain
+for each function is: plain build → relaxed (trampoline) build → the
+interpreter. A function that ends up interpreted registers in the same
+`inst.funcs` table as its compiled siblings, so the two kinds call each
+other freely and one stubborn function doesn't cost the module its speed.
+The optional `chunk_cache` records compiled chunks (and `"interp"`
+markers), so repeat instantiations of the same module skip codegen
+entirely — that's what `wasm.precompile` builds on, and how a warm Picat
+daemon serves a second session without recompiling 5 MB of engine.
 
 ### A worked example
 
