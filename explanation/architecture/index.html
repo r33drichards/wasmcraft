@@ -1,0 +1,2044 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A pure-Lua WebAssembly engine for CC:Tweaked — with SQLite and Picat in Minecraft.">
+      
+      
+      
+        <link rel="canonical" href="https://r33drichards.github.io/wasmcraft/explanation/architecture/">
+      
+      
+        <link rel="prev" href="../../reference/picat/">
+      
+      
+        <link rel="next" href="../cobalt-and-computercraft/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>Architecture - wasmcraft</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="wasmcraft" class="md-header__button md-logo" aria-label="wasmcraft" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            wasmcraft
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/r33drichards/wasmcraft" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="wasmcraft" class="md-nav__button md-logo" aria-label="wasmcraft" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    wasmcraft
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/r33drichards/wasmcraft" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/sqlite-in-computercraft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SQLite in ComputerCraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-to guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-to guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install wasmcraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-a-wasm-module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run a wasm module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/embed-the-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embed the engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-the-tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run the tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/rebuild-artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rebuild fixtures and the bundle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Applications
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Applications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/use-sqlite-from-lua/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use SQLite from Lua
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-picat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run Picat programs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-a-picat-daemon/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run a Picat daemon over rednet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lua-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lua API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/wasi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WASI host
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command-line tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/project-layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project layout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Applications
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Applications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/sql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SQL API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/picat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Picat API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explanation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Explanation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The façade
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decoding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decoding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#numbers-on-a-vm-that-only-has-doubles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numbers on a VM that only has doubles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-interpreter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The interpreter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-compiler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compiler
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The compiler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#register-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Register layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compilation-is-a-stack-simulation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compilation is a stack simulation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emitting-real-bytecode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emitting real bytecode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trampolines-when-sqlite-outgrows-luas-jump-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trampolines: when SQLite outgrows Lua's jump range
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lazy-per-function-compilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lazy, per-function compilation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-wasi-host-is-just-an-import-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The WASI host is just an import module
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#correctness-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correctness strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-deliberately-not-in-the-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's deliberately not in the engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cobalt-and-computercraft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cobalt and ComputerCraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wasi-and-persistence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WASI and persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-facade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The façade
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decoding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decoding
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#numbers-on-a-vm-that-only-has-doubles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numbers on a VM that only has doubles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-interpreter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The interpreter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-compiler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compiler
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The compiler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#register-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Register layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compilation-is-a-stack-simulation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compilation is a stack simulation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#emitting-real-bytecode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Emitting real bytecode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trampolines-when-sqlite-outgrows-luas-jump-range" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trampolines: when SQLite outgrows Lua's jump range
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lazy-per-function-compilation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lazy, per-function compilation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-wasi-host-is-just-an-import-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The WASI host is just an import module
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#correctness-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correctness strategy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-deliberately-not-in-the-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's deliberately not in the engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
+<p>wasmcraft is a WebAssembly engine: it takes the bytes of a <code>.wasm</code> module and
+executes them on a Lua VM whose only number type is an IEEE double and whose
+language (on the primary target, Cobalt) is Lua 5.1. This page walks through
+the engine layer by layer, with the actual code.</p>
+<p>One framing note up front: <strong>wasmcraft is just the engine.</strong> SQLite
+(<code>sql.lua</code> + <code>wq.wasm</code>) and Picat (<code>picat.lua</code> + <code>picat.wasm</code>) are
+applications <em>built on</em> wasmcraft — they are ordinary clients of the public
+API described here, with no special hooks into the engine. Everything below
+is about the engine itself.</p>
+<div class="highlight"><pre><span></span><code>                 your Lua code
+                       │
+            ┌──────────┴──────────┐
+            │   wasm.lua façade   │   load() / instantiate() / precompile()
+            └──────────┬──────────┘
+                       │
+   .wasm bytes ──► decoder.lua ──► module tables
+                       │
+            ┌──────────┴───────────┐
+            ▼                      ▼
+       interp.lua             compiler.lua ──► luabc.lua ──► Lua 5.1 bytecode
+   (portable, anywhere)      (Cobalt loads it natively, ~7-13x)
+            │                      │
+            └────────┬─────────────┘
+                     ▼
+     memory.lua · int64.lua · bit.lua      shared substrate
+                     │
+                 wasi.lua                  optional host (an import module)
+</code></pre></div>
+<h2 id="the-facade">The façade<a class="headerlink" href="#the-facade" title="Permanent link">&para;</a></h2>
+<p><code>src/wasm.lua</code> is 55 lines and is the whole public surface. The only
+decision it makes is which execution engine to hand a module to:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/wasm.lua</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">is_cobalt</span><span class="p">()</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nb">_VERSION</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;Lua 5.1&quot;</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="nb">rawget</span><span class="p">(</span><span class="nb">_G</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;bit32&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">~=</span><span class="w"> </span><span class="kc">nil</span>
+<span class="kr">end</span>
+
+<span class="kr">function</span><span class="w"> </span><span class="nc">M</span><span class="p">.</span><span class="nf">instantiate</span><span class="p">(</span><span class="nv">module</span><span class="p">,</span><span class="w"> </span><span class="nv">imports</span><span class="p">,</span><span class="w"> </span><span class="nv">opts</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">opts</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="nv">opts</span><span class="p">.</span><span class="py">mode</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s2">&quot;interp&quot;</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="p">(</span><span class="nv">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;jit&quot;</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nv">mode</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;compile&quot;</span><span class="p">)</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="nf">is_cobalt</span><span class="p">()</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">    </span><span class="kr">return</span><span class="w"> </span><span class="nb">require</span><span class="p">(</span><span class="s2">&quot;compiler&quot;</span><span class="p">).</span><span class="nf">instantiate</span><span class="p">(</span><span class="nv">module</span><span class="p">,</span><span class="w"> </span><span class="nv">imports</span><span class="p">,</span><span class="w"> </span><span class="nv">opts</span><span class="p">)</span>
+<span class="w">  </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nv">interp</span><span class="p">.</span><span class="nf">instantiate</span><span class="p">(</span><span class="nv">module</span><span class="p">,</span><span class="w"> </span><span class="nv">imports</span><span class="p">)</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>Both engines produce instances with an identical surface (<code>inst:call</code>,
+<code>inst.memory</code>), so <code>mode = "jit"</code> is always safe to request — it simply
+falls back where the bytecode can't load.</p>
+<h2 id="decoding">Decoding<a class="headerlink" href="#decoding" title="Permanent link">&para;</a></h2>
+<p><code>src/leb.lua</code> is a byte cursor over the module string. It deliberately uses
+<strong>no bitwise operations</strong> — LEB128 is decoded with multiplication — so the
+same file parses on Lua 5.1 and 5.4 and needs no <code>bit</code> dependency:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/leb.lua — unsigned LEB128, exact for values up to 2^53</span>
+<span class="kr">function</span><span class="w"> </span><span class="nc">Reader</span><span class="p">:</span><span class="nf">u_leb</span><span class="p">()</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">result</span><span class="p">,</span><span class="w"> </span><span class="nv">shift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span>
+<span class="w">  </span><span class="kr">while</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="kr">do</span>
+<span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">self</span><span class="p">:</span><span class="nf">byte</span><span class="p">()</span>
+<span class="w">    </span><span class="nv">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">result</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="p">(</span><span class="nv">b</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">128</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nv">shift</span>
+<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">128</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nv">result</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">    </span><span class="nv">shift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">shift</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">128</span>
+<span class="w">  </span><span class="kr">end</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p><code>src/decoder.lua</code> walks the section structure into plain Lua tables —
+<code>mod.types</code>, <code>mod.codes</code>, <code>mod.exports</code>, and so on. Function bodies become
+flat arrays of instruction tables like <code>{ op = "i32.add" }</code> or
+<code>{ op = "local.get", x = 0 }</code>.</p>
+<p>The one clever part: wasm's structured control (<code>block</code>/<code>loop</code>/<code>if</code>/<code>end</code>)
+is <strong>pre-linked at decode time</strong>. A single pass with a stack records, on
+every opener, the index of its matching <code>end</code> (and <code>else</code>), so neither
+execution engine ever scans for block boundaries at run time:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/decoder.lua — link control structures</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">stack</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{}</span>
+<span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="o">#</span><span class="nv">instrs</span><span class="w"> </span><span class="kr">do</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">instrs</span><span class="p">[</span><span class="nv">i</span><span class="p">].</span><span class="nv">op</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;block&quot;</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;loop&quot;</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;if&quot;</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">    </span><span class="nv">stack</span><span class="p">[</span><span class="o">#</span><span class="nv">stack</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">i</span>
+<span class="w">  </span><span class="kr">elseif</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;else&quot;</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">    </span><span class="nv">instrs</span><span class="p">[</span><span class="nv">stack</span><span class="p">[</span><span class="o">#</span><span class="nv">stack</span><span class="p">]].</span><span class="nv">else_pc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">i</span>
+<span class="w">  </span><span class="kr">elseif</span><span class="w"> </span><span class="nv">o</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;end&quot;</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">stack</span><span class="p">[</span><span class="o">#</span><span class="nv">stack</span><span class="p">];</span><span class="w"> </span><span class="nv">stack</span><span class="p">[</span><span class="o">#</span><span class="nv">stack</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">nil</span>
+<span class="w">    </span><span class="nv">instrs</span><span class="p">[</span><span class="nv">j</span><span class="p">].</span><span class="nv">end_pc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">i</span>
+<span class="w">  </span><span class="kr">end</span>
+<span class="kr">end</span>
+</code></pre></div>
+<h2 id="numbers-on-a-vm-that-only-has-doubles">Numbers on a VM that only has doubles<a class="headerlink" href="#numbers-on-a-vm-that-only-has-doubles" title="Permanent link">&para;</a></h2>
+<p>This is the central design problem, and three representations fall out of it.</p>
+<p><strong>i32</strong> values live in <em>canonical unsigned form</em> <code>0 .. 2^32-1</code> — a range a
+double holds exactly. Signedness is not stored; it is a per-operation view:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/interp.lua</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">to_u32</span><span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+<span class="w">  </span><span class="nv">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="nv">POW32</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">POW32</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nv">x</span>
+<span class="kr">end</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">to_s32</span><span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+<span class="w">  </span><span class="nv">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">to_u32</span><span class="p">(</span><span class="nv">x</span><span class="p">)</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nv">POW31</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">POW32</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nv">x</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>Addition is just <code>(a + b) % 2^32</code> — the intermediate fits in a double. But
+<code>a * b</code> of two 32-bit values can need 64 bits, which a double silently
+rounds. So multiplication splits into 16-bit lanes, keeping every partial
+product under 2^53:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/interp.lua — i32.mul: low 32 bits via 16-bit lanes</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">al</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">65536</span><span class="p">;</span><span class="w"> </span><span class="kd">local</span><span class="w"> </span><span class="nv">ah</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">floor</span><span class="p">(</span><span class="nv">a</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">65536</span><span class="p">)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">bl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">65536</span><span class="p">;</span><span class="w"> </span><span class="kd">local</span><span class="w"> </span><span class="nv">bh</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">floor</span><span class="p">(</span><span class="nv">b</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">65536</span><span class="p">)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">cross</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nv">ah</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nv">bl</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">al</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nv">bh</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">65536</span>
+<span class="nf">push</span><span class="p">((</span><span class="nv">al</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nv">bl</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">cross</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">65536</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="nv">POW32</span><span class="p">)</span>
+</code></pre></div>
+<p><strong>i64</strong> cannot fit in a double at all, so <code>src/int64.lua</code> boxes values as a
+pair of unsigned 32-bit halves and implements wrapping arithmetic with
+explicit carries:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/int64.lua — a value is { h = high32, l = low32 }</span>
+<span class="kr">function</span><span class="w"> </span><span class="nc">I</span><span class="p">.</span><span class="nf">add</span><span class="p">(</span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">l</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">a</span><span class="p">.</span><span class="py">l</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">b</span><span class="p">.</span><span class="py">l</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">carry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">l</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nv">POW32</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="nv">l</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">l</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">POW32</span><span class="p">;</span><span class="w"> </span><span class="nv">carry</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">h</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="nv">a</span><span class="p">.</span><span class="py">h</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">b</span><span class="p">.</span><span class="py">h</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">carry</span><span class="p">)</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="nv">POW32</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nf">mk</span><span class="p">(</span><span class="nv">h</span><span class="p">,</span><span class="w"> </span><span class="nv">l</span><span class="p">)</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>Signedness is again a view: <code>lt_s</code> and <code>lt_u</code> interpret the same box
+differently. At the host boundary the box converts to a Lua number (exact
+up to 2^53) — inside the engine it never unboxes.</p>
+<p><strong>f32</strong> is a double that gets re-rounded through single precision after
+every producing operation, using <code>string.pack</code> as the rounding machine:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">f32round</span><span class="p">(</span><span class="nv">x</span><span class="p">)</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="p">(</span><span class="nf">sunpack</span><span class="p">(</span><span class="s2">&quot;&lt;f&quot;</span><span class="p">,</span><span class="w"> </span><span class="nf">spack</span><span class="p">(</span><span class="s2">&quot;&lt;f&quot;</span><span class="p">,</span><span class="w"> </span><span class="nv">x</span><span class="p">)))</span><span class="w"> </span><span class="kr">end</span>
+</code></pre></div>
+<p><code>string.pack</code>/<code>string.unpack</code> also carry all IEEE decoding, reinterpret
+casts (<code>i32.reinterpret_f32</code> is a pack/unpack round-trip), and typed memory
+access. The handful of float edge cases doubles don't give you for free —
+NaN propagation in <code>min</code>/<code>max</code>, negative zero, round-half-to-even — are
+hand-written and pinned by the <code>floatops.wat</code> fixture.</p>
+<h2 id="the-interpreter">The interpreter<a class="headerlink" href="#the-interpreter" title="Permanent link">&para;</a></h2>
+<p><code>src/interp.lua</code> executes the decoded instruction array directly. Per call
+it builds three structures — locals, an operand stack with an explicit
+height, and a control stack:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/interp.lua — inside run()</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">st</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">}</span><span class="w">                       </span><span class="c1">-- operand stack</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">push</span><span class="p">(</span><span class="nv">v</span><span class="p">)</span><span class="w"> </span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nv">st</span><span class="p">[</span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">v</span><span class="w"> </span><span class="kr">end</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">pop</span><span class="p">()</span><span class="w"> </span><span class="kd">local</span><span class="w"> </span><span class="nv">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">st</span><span class="p">[</span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="p">];</span><span class="w"> </span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nv">v</span><span class="w"> </span><span class="kr">end</span>
+
+<span class="c1">-- bottom control frame represents the function body itself</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">ctrl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;block&quot;</span><span class="p">,</span><span class="w"> </span><span class="nv">height</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nv">arity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">#</span><span class="nv">ftype</span><span class="p">.</span><span class="py">results</span><span class="p">,</span><span class="w"> </span><span class="nv">cont</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>The main loop is one long <code>if/elseif</code> dispatch on <code>ins.op</code> over a program
+counter. Branching is where the structured-control design pays off: a <code>br</code>
+to label <em>k</em> finds the frame <em>k</em> levels up, slides that frame's result
+values down to its entry height, discards inner frames, and jumps straight
+to the pre-linked target — <code>start</code> for a <code>loop</code> (back-edge), <code>cont</code>
+(the decoder's <code>end_pc</code>) for a <code>block</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/interp.lua</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">branch</span><span class="p">(</span><span class="nv">label</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">fi</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">#</span><span class="nv">ctrl</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">label</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">fr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">ctrl</span><span class="p">[</span><span class="nv">fi</span><span class="p">]</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">keep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">fr</span><span class="p">.</span><span class="py">arity</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">fr</span><span class="p">.</span><span class="py">height</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">keep</span><span class="w"> </span><span class="kr">do</span><span class="w"> </span><span class="nv">st</span><span class="p">[</span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">st</span><span class="p">[</span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">keep</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="nv">st</span><span class="p">.</span><span class="py">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">keep</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">#</span><span class="nv">ctrl</span><span class="p">,</span><span class="w"> </span><span class="nv">fi</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="w"> </span><span class="kr">do</span><span class="w"> </span><span class="nv">ctrl</span><span class="p">[</span><span class="nv">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">fr</span><span class="p">.</span><span class="py">kind</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;loop&quot;</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nv">fr</span><span class="p">.</span><span class="py">start</span><span class="w"> </span><span class="kr">else</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nv">fr</span><span class="p">.</span><span class="py">cont</span><span class="w"> </span><span class="kr">end</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p><code>return</code> is just a branch to the bottom frame; <code>br_table</code> pops an index and
+picks a label; <code>call</code> recurses into <code>run</code> with popped arguments. Traps are
+Lua errors prefixed <code>"wasm trap: "</code>, raised at explicit checks (bounds,
+divide-by-zero, the <code>0x80000000 / -1</code> overflow case, uninitialized table
+elements).</p>
+<p>The loop head also implements cooperative yielding — a host-registered hook
+called every N instructions, which is how long runs survive CC:Tweaked's
+watchdog (see <a href="../cobalt-and-computercraft/">Cobalt and ComputerCraft</a>):</p>
+<div class="highlight"><pre><span></span><code><span class="kr">if</span><span class="w"> </span><span class="nv">yield_hook</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">  </span><span class="nv">ycount</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">ycount</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="nv">ycount</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="nv">yield_every</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="nv">ycount</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nf">yield_hook</span><span class="p">()</span><span class="w"> </span><span class="kr">end</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>The interpreter is the portable baseline and the semantic reference: it
+runs anywhere, and the compiler's helpers are defined to mirror it exactly.</p>
+<h2 id="the-compiler">The compiler<a class="headerlink" href="#the-compiler" title="Permanent link">&para;</a></h2>
+<p>The interpreter pays Lua-table dispatch per wasm instruction, and SQLite is
+millions of instructions. The fix exploits a Cobalt-specific fact: <strong>Cobalt
+loads standard Lua 5.1 bytecode</strong>, and Lua 5.1 bytecode is a stable,
+documented register machine. So <code>src/compiler.lua</code> translates each wasm
+function into a real Lua function, and Cobalt executes it natively — no
+dispatch loop at all. Measured speedup: ~7–13×.</p>
+<h3 id="register-layout">Register layout<a class="headerlink" href="#register-layout" title="Permanent link">&para;</a></h3>
+<p>A wasm function becomes a Lua function whose parameters arrive in registers
+0..n-1, with a fixed frame after them:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/compiler.lua — build_fb()</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">renv</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">nparams</span><span class="w">         </span><span class="c1">-- ENV table, cached from an upvalue</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">Ltab</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">nparams</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w">     </span><span class="c1">-- wasm locals live in a Lua table</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">kscr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">nparams</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="c1">-- scratch for spilling out-of-range constants</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">nparams</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">3</span><span class="w">     </span><span class="c1">-- wasm operand stack starts here, in registers</span>
+</code></pre></div>
+<p>Two non-obvious choices:</p>
+<ul>
+<li><strong>Locals go in a table, not registers.</strong> Real wasm functions (wasi-libc
+  builds especially) can declare hundreds of locals; Lua functions cap out
+  around 250 registers. The locals table costs a <code>GETTABLE</code>/<code>SETTABLE</code> per
+  access but never overflows. Only the operand stack — which is shallow in
+  practice — occupies registers.</li>
+<li><strong>Everything external comes through one ENV table</strong> held as the
+  function's single upvalue: runtime helpers, <code>memory</code>, <code>globals</code>, <code>funcs</code>,
+  tables. Compiled functions call each other via <code>ENV.funcs[i]</code>, so a
+  compiled module is a set of mutually-recursive closures over one shared
+  environment.</li>
+</ul>
+<h3 id="compilation-is-a-stack-simulation">Compilation is a stack simulation<a class="headerlink" href="#compilation-is-a-stack-simulation" title="Permanent link">&para;</a></h3>
+<p>The compiler walks the instruction array once, tracking the <em>virtual</em> stack
+pointer <code>vsp</code>. A value "on the wasm stack" at height <em>k</em> simply lives in
+register <code>base + k</code>. Simple ops compile to one or two Lua instructions
+inline:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/compiler.lua — i32.add becomes ADD then MOD 2^32, in place</span>
+<span class="kr">elseif</span><span class="w"> </span><span class="nv">op</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;i32.add&quot;</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">vsp</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="kd">local</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">vsp</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">2</span>
+<span class="w">  </span><span class="nv">fb</span><span class="p">:</span><span class="nf">ARITH</span><span class="p">(</span><span class="nv">OP</span><span class="p">.</span><span class="py">ADD</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">)</span>
+<span class="w">  </span><span class="nv">fb</span><span class="p">:</span><span class="nf">ARITH</span><span class="p">(</span><span class="nv">OP</span><span class="p">.</span><span class="py">MOD</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nf">kop</span><span class="p">(</span><span class="nv">kwrap</span><span class="p">))</span><span class="w">   </span><span class="c1">-- kwrap = constant 4294967296</span>
+<span class="w">  </span><span class="nv">vsp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">vsp</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span>
+</code></pre></div>
+<p>Anything that won't inline cleanly — signed ops, i64 (boxed), float edge
+cases, all memory traffic — calls a named helper from
+<code>src/runtime.lua</code> through ENV. The emitter for that is generic:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/compiler.lua — pop nargs, call ENV[name], push nres</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">helper</span><span class="p">(</span><span class="nv">name</span><span class="p">,</span><span class="w"> </span><span class="nv">nargs</span><span class="p">,</span><span class="w"> </span><span class="nv">nresx</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">argbase</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">vsp</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">nargs</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">f</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">vsp</span>
+<span class="w">  </span><span class="nv">fb</span><span class="p">:</span><span class="nf">GETTABLE</span><span class="p">(</span><span class="nv">f</span><span class="p">,</span><span class="w"> </span><span class="nv">renv</span><span class="p">,</span><span class="w"> </span><span class="nf">kop</span><span class="p">(</span><span class="nv">fb</span><span class="p">:</span><span class="nf">kstr</span><span class="p">(</span><span class="nv">name</span><span class="p">)))</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nv">nargs</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="kr">do</span><span class="w"> </span><span class="nv">fb</span><span class="p">:</span><span class="nf">MOVE</span><span class="p">(</span><span class="nv">f</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">,</span><span class="w"> </span><span class="nv">argbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">)</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="nv">fb</span><span class="p">:</span><span class="nf">CALL</span><span class="p">(</span><span class="nv">f</span><span class="p">,</span><span class="w"> </span><span class="nv">nargs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">nresx</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nv">nresx</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="kr">do</span><span class="w"> </span><span class="nv">fb</span><span class="p">:</span><span class="nf">MOVE</span><span class="p">(</span><span class="nv">argbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">,</span><span class="w"> </span><span class="nv">f</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">)</span><span class="w"> </span><span class="kr">end</span>
+<span class="w">  </span><span class="nv">vsp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">vsp</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">nargs</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">nresx</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>A 400-entry table maps opcodes to helper names (<code>i32.div_s → "div_s"</code>,
+<code>i64.add → "i64_add"</code>, <code>f32.sqrt → "f32_sqrt"</code>, …). The helpers'
+semantics deliberately mirror <code>interp.lua</code> line for line — the interpreter
+is the reference, the runtime is its transcription.</p>
+<p>Control flow maps wasm's structured labels onto <code>JMP</code> with patched offsets:
+each <code>block</code>/<code>if</code> gets a label object, <code>br</code> moves result values down and
+jumps, <code>loop</code> back-edges jump backwards (optionally emitting an
+<code>ENV.__tick()</code> call first — the jit's watchdog yield). Dead code after an
+unconditional branch is skipped entirely rather than compiled.</p>
+<h3 id="emitting-real-bytecode">Emitting real bytecode<a class="headerlink" href="#emitting-real-bytecode" title="Permanent link">&para;</a></h3>
+<p><code>src/luabc.lua</code> is a from-scratch Lua 5.1 bytecode assembler — instruction
+packing, constant pools with deduplication, jump fixups, and the chunk
+header Cobalt's loader checks:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua</span>
+<span class="c1">-- instruction layout: op[0:6] A[6:14] C[14:23] B[23:32]</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">iABC</span><span class="p">(</span><span class="nv">op</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">,</span><span class="w"> </span><span class="nv">c</span><span class="p">)</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nf">u32</span><span class="p">(</span><span class="nv">op</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">64</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">c</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">16384</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8388608</span><span class="p">)</span><span class="w"> </span><span class="kr">end</span>
+
+<span class="c1">-- \x1bLua, version 5.1, little-endian, 4-byte int/size_t/instruction, 8-byte doubles</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">HEADER</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">string.char</span><span class="p">(</span><span class="mh">0x1b</span><span class="p">,</span><span class="w"> </span><span class="mh">0x4c</span><span class="p">,</span><span class="w"> </span><span class="mh">0x75</span><span class="p">,</span><span class="w"> </span><span class="mh">0x61</span><span class="p">,</span><span class="w"> </span><span class="mh">0x51</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<p>Each compiled function is wrapped in a tiny factory proto —
+<code>function(ENV) return &lt;the function&gt; end</code> — so a chunk is self-contained:
+<code>loadstring(chunk)(ENV)</code> yields the wasm function with its environment
+bound as the upvalue.</p>
+<h3 id="trampolines-when-sqlite-outgrows-luas-jump-range">Trampolines: when SQLite outgrows Lua's jump range<a class="headerlink" href="#trampolines-when-sqlite-outgrows-luas-jump-range" title="Permanent link">&para;</a></h3>
+<p>Lua 5.1 has exactly <strong>one</strong> jump instruction, and its offset lives in the
+18-bit <code>sBx</code> field — a reach of ±131,071 instructions. Wasm branches have
+no such limit, and SQLite's amalgamation contains functions (the VDBE
+dispatch loop, the parser) whose compiled bodies are longer than that: a
+<code>br</code> from deep inside to the function's <code>end</code> simply cannot be encoded as
+one <code>JMP</code>. Unlike a real ISA, Lua bytecode has no long-jump form to fall
+back on.</p>
+<p>The plain build refuses such a function outright:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua — build()</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">sbx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">j</span><span class="p">.</span><span class="py">label</span><span class="p">.</span><span class="py">target</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nv">j</span><span class="p">.</span><span class="py">pos</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span>
+<span class="kr">if</span><span class="w"> </span><span class="nv">sbx</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">131071</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nv">sbx</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="o">-</span><span class="mi">131071</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">  </span><span class="nb">error</span><span class="p">(</span><span class="s2">&quot;function too large: jump out of range&quot;</span><span class="p">)</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>The compiler catches that error and retries with a relaxed build
+(<code>compile_func</code> → <code>compile_oversized</code>), which reroutes each too-far jump
+through <strong>trampolines</strong> — intermediate <code>JMP</code>s that each hop part of the
+distance:</p>
+<div class="highlight"><pre><span></span><code>src ──JMP──► trampoline ──JMP──► trampoline ──JMP──► target
+   ≤131k        ≤131k               ≤131k
+</code></pre></div>
+<p>Two problems make this more interesting than it sounds.</p>
+<p><strong>Where can a trampoline live?</strong> It's an instruction spliced into the
+middle of a function body — if control ever <em>fell through</em> into it, it
+would teleport execution somewhere wild. The only safe slots are dead
+code. So during normal emission the compiler marks <strong>anchors</strong>: positions
+immediately after an unconditional control transfer, which fall-through
+can never reach:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua — called after every br / br_table / return / unreachable.</span>
+<span class="c1">-- Code there is never reached by fall-through, so build_relaxed() may</span>
+<span class="c1">-- splice trampoline JMPs in.</span>
+<span class="kr">function</span><span class="w"> </span><span class="nc">FB</span><span class="p">:</span><span class="nf">anchor</span><span class="p">()</span><span class="w"> </span><span class="nv">self</span><span class="p">.</span><span class="py">anchors</span><span class="p">[</span><span class="o">#</span><span class="nv">self</span><span class="p">.</span><span class="py">anchors</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">#</span><span class="nv">self</span><span class="p">.</span><span class="py">code</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="kr">end</span>
+</code></pre></div>
+<p>Big functions have lots of unconditional branches, so anchors are dense
+enough in practice that a hop toward any target can always find one.</p>
+<p><strong>Insertion moves everything.</strong> Splicing a trampoline shifts every
+instruction after it, which changes jump distances — possibly pushing
+previously-fine jumps out of range, which demands more trampolines, which
+shift positions again. So relaxation iterates to a fixed point:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua — build_relaxed()</span>
+<span class="kr">for</span><span class="w"> </span><span class="nv">pass</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">500</span><span class="w"> </span><span class="kr">do</span>
+<span class="w">  </span><span class="nf">recompute</span><span class="p">()</span><span class="w">                                  </span><span class="c1">-- positions incl. current tramps</span>
+<span class="w">  </span><span class="nv">added</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">_</span><span class="p">,</span><span class="w"> </span><span class="nv">j</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="nb">ipairs</span><span class="p">(</span><span class="nv">self</span><span class="p">.</span><span class="py">jumps</span><span class="p">)</span><span class="w"> </span><span class="kr">do</span>
+<span class="w">    </span><span class="kd">local</span><span class="w"> </span><span class="nv">srcpos</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">newpos</span><span class="p">(</span><span class="nv">j</span><span class="p">.</span><span class="py">pos</span><span class="p">)</span>
+<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="ow">not</span><span class="w"> </span><span class="p">(</span><span class="nv">j</span><span class="p">.</span><span class="py">imm</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="nf">ok_range</span><span class="p">(</span><span class="nv">srcpos</span><span class="p">,</span><span class="w"> </span><span class="nv">j</span><span class="p">.</span><span class="py">imm</span><span class="p">))</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">      </span><span class="nv">j</span><span class="p">.</span><span class="py">imm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">route1</span><span class="p">(</span><span class="nv">srcpos</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">j</span><span class="p">.</span><span class="py">label</span><span class="w"> </span><span class="p">})</span><span class="w">  </span><span class="c1">-- may create a trampoline</span>
+<span class="w">    </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">for</span><span class="w"> </span><span class="nv">_</span><span class="p">,</span><span class="w"> </span><span class="nv">rec</span><span class="w"> </span><span class="kr">in</span><span class="w"> </span><span class="nb">ipairs</span><span class="p">(</span><span class="nv">allTramps</span><span class="p">)</span><span class="w"> </span><span class="kr">do</span><span class="w">           </span><span class="c1">-- trampolines re-route too:</span>
+<span class="w">    </span><span class="kr">if</span><span class="w"> </span><span class="ow">not</span><span class="w"> </span><span class="nf">ok_range</span><span class="p">(</span><span class="nf">trampPos</span><span class="p">(</span><span class="nv">rec</span><span class="p">),</span><span class="w"> </span><span class="nv">rec</span><span class="p">.</span><span class="py">imm</span><span class="p">)</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="c1">-- a hop can itself be too far</span>
+<span class="w">      </span><span class="nv">rec</span><span class="p">.</span><span class="py">imm</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">route1</span><span class="p">(</span><span class="nf">trampPos</span><span class="p">(</span><span class="nv">rec</span><span class="p">),</span><span class="w"> </span><span class="nv">rec</span><span class="p">.</span><span class="py">finalT</span><span class="p">)</span><span class="w"> </span><span class="c1">-- and chain through another</span>
+<span class="w">    </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">end</span>
+<span class="w">  </span><span class="kr">if</span><span class="w"> </span><span class="ow">not</span><span class="w"> </span><span class="nv">added</span><span class="w"> </span><span class="kr">then</span><span class="w"> </span><span class="kr">break</span><span class="w"> </span><span class="kr">end</span>
+<span class="kr">end</span>
+</code></pre></div>
+<p>Three details keep this converging instead of oscillating:</p>
+<ul>
+<li><strong>Memoization</strong> — one trampoline per (anchor, label); every jump heading
+  for the same target routes through the same hop instead of spawning its
+  own.</li>
+<li><strong>Stickiness</strong> — a jump that already has an in-range immediate target
+  keeps it; only jumps actually knocked out of range re-route.</li>
+<li><strong>Margin</strong> — routing uses a safe reach of 130,000 rather than the hard
+  131,071, so the small position shifts from later insertions don't
+  invalidate earlier routing decisions.</li>
+</ul>
+<p>The output is the same proto with identical semantics — some branches just
+take two or three hops, costing one <code>JMP</code> dispatch each on those paths.
+Only the relaxed path pays any of this; normally-sized functions never run
+it.</p>
+<h3 id="lazy-per-function-compilation">Lazy, per-function compilation<a class="headerlink" href="#lazy-per-function-compilation" title="Permanent link">&para;</a></h3>
+<p>Compilation is per-function and happens on first call. The fallback chain
+for each function is: plain build → relaxed (trampoline) build → the
+interpreter. A function that ends up interpreted registers in the same
+<code>inst.funcs</code> table as its compiled siblings, so the two kinds call each
+other freely and one stubborn function doesn't cost the module its speed.
+The optional <code>chunk_cache</code> records compiled chunks (and <code>"interp"</code>
+markers), so repeat instantiations of the same module skip codegen
+entirely — that's what <code>wasm.precompile</code> builds on, and how a warm Picat
+daemon serves a second session without recompiling 5 MB of engine.</p>
+<h3 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h3>
+<p>The <code>add</code> fixture, end to end:</p>
+<div class="highlight"><pre><span></span><code>(func (export &quot;add&quot;) (param i32 i32) (result i32)
+  local.get 0
+  local.get 1
+  i32.add)
+</code></pre></div>
+<p>The decoder produces
+<code>{ {op="local.get", x=0}, {op="local.get", x=1}, {op="i32.add"}, {op="end"} }</code>.
+The interpreter pushes <code>L[0]</code>, pushes <code>L[1]</code>, then pops twice and pushes
+<code>to_u32(a + b)</code>. The compiler instead emits (registers: <code>R2</code>=ENV, <code>R3</code>=locals
+table, <code>R5</code>=stack base):</p>
+<div class="highlight"><pre><span></span><code>GETTABLE R5, R3, K&quot;0&quot;     ; push local 0
+GETTABLE R6, R3, K&quot;1&quot;     ; push local 1
+ADD      R5, R5, R6       ; i32.add ...
+MOD      R5, R5, K2^32    ; ...wrapped to u32
+RETURN   R5, 2            ; one result
+</code></pre></div>
+<p>Cobalt runs that at full VM speed — there is no wasmcraft code on the hot
+path at all.</p>
+<h2 id="the-wasi-host-is-just-an-import-module">The WASI host is just an import module<a class="headerlink" href="#the-wasi-host-is-just-an-import-module" title="Permanent link">&para;</a></h2>
+<p><code>src/wasi.lua</code> is not wired into the engine. It builds an ordinary imports
+table — Lua functions keyed by WASI's import names — that you pass to
+<code>instantiate</code> like any other host functions:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">local</span><span class="w"> </span><span class="nv">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">wasi</span><span class="p">.</span><span class="nf">make</span><span class="p">({</span><span class="w"> </span><span class="nv">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="s2">&quot;prog&quot;</span><span class="p">},</span><span class="w"> </span><span class="nv">write</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">io.write</span><span class="p">,</span><span class="w"> </span><span class="nv">root</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;.&quot;</span><span class="w"> </span><span class="p">})</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">inst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">wasm</span><span class="p">.</span><span class="nf">instantiate</span><span class="p">(</span><span class="nv">module</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">wasi_snapshot_preview1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">host</span><span class="w"> </span><span class="p">})</span>
+</code></pre></div>
+<p>That separation is what makes the engine general: a module importing your
+own <code>env.whatever</code> functions needs no WASI at all, and the WASI host itself
+never touches engine internals beyond <code>inst.memory</code>. Its file model (whole
+files cached as in-memory images, flushed on sync/close) is covered in
+<a href="../wasi-and-persistence/">WASI and persistence</a>.</p>
+<h2 id="correctness-strategy">Correctness strategy<a class="headerlink" href="#correctness-strategy" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Hand-written <code>.wat</code> fixtures</strong> (<code>test/wat/</code>) pin the op space:
+  <code>i32ops</code>, <code>i64ops</code>, <code>floatops</code>, <code>brtable</code>, <code>indirect</code>, <code>mem</code>, <code>glob</code>,
+  <code>edge</code>, …</li>
+<li><strong>C fixtures</strong> prove wasi-libc startup and real workloads
+  (<code>hello</code>, <code>compute</code>, SQLite).</li>
+<li><strong>wasmtime is the differential oracle</strong> — same module, same input,
+  byte-identical output expected.</li>
+<li><strong>Every test runs on both VMs</strong> (<code>tools/test</code>): Lua 5.4 for speed, the
+  real Cobalt jar because the two disagree in exactly the ways that matter.</li>
+<li><strong>The interpreter checks the compiler.</strong> Same module, both modes, same
+  results (<code>test/compiler_test.lua</code>) — the tree-walker is simple enough to
+  trust, which makes it the reference for the bytecode path.</li>
+</ul>
+<p>The ultimate integration test is SQLite: if the i64 carries, the memory
+model, or the WASI filesystem are wrong anywhere, a <code>CREATE</code>/<code>INSERT</code>/
+<code>SELECT</code> round-trip finds out.</p>
+<h2 id="whats-deliberately-not-in-the-engine">What's deliberately <em>not</em> in the engine<a class="headerlink" href="#whats-deliberately-not-in-the-engine" title="Permanent link">&para;</a></h2>
+<p>No SIMD (<code>v128</code> decodes as a type but doesn't execute), no threads/atomics,
+no GC types, no exception handling, no multiple memories. Block/loop/if
+take no parameters in the jit path (results work; params trigger an
+assertion and the interpreter handles those modules). Each gap is an
+error, not a silent wrong answer.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "content.code.copy"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+    
+  </body>
+</html>

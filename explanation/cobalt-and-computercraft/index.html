@@ -1,0 +1,1679 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A pure-Lua WebAssembly engine for CC:Tweaked — with SQLite and Picat in Minecraft.">
+      
+      
+      
+        <link rel="canonical" href="https://r33drichards.github.io/wasmcraft/explanation/cobalt-and-computercraft/">
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../wasi-and-persistence/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.0">
+    
+    
+      
+        <title>Cobalt and ComputerCraft - wasmcraft</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.618322db.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cobalt-and-computercraft" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="wasmcraft" class="md-header__button md-logo" aria-label="wasmcraft" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            wasmcraft
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cobalt and ComputerCraft
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/r33drichards/wasmcraft" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="wasmcraft" class="md-nav__button md-logo" aria-label="wasmcraft" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    wasmcraft
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/r33drichards/wasmcraft" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tutorials
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/sqlite-in-computercraft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SQLite in ComputerCraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-to guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-to guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install wasmcraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-a-wasm-module/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run a wasm module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/embed-the-engine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Embed the engine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-the-tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run the tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/rebuild-artifacts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rebuild fixtures and the bundle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_6" id="__nav_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Applications
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Applications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/use-sqlite-from-lua/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use SQLite from Lua
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-picat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run Picat programs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/run-a-picat-daemon/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run a Picat daemon over rednet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/lua-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lua API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/wasi/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WASI host
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command-line tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/project-layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project layout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Applications
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Applications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/sql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SQL API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/picat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Picat API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Explanation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Explanation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cobalt and ComputerCraft
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cobalt and ComputerCraft
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-vm-cobalt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The VM: Cobalt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-jit-lifecycle-generate-load-execute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The jit lifecycle: generate, load, execute
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The jit lifecycle: generate, load, execute">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-generate-a-chunk-is-just-a-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Generate — a chunk is just a string
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-load-loadstring-does-the-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Load — loadstring does the work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-execute-its-just-a-lua-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Execute — it's just a Lua function
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#all-three-steps-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        All three steps, by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-watchdog-yielding-or-dying" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog: yielding or dying
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#distribution-one-file-over-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distribution: one file over HTTP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-is-worth-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this is worth it
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wasi-and-persistence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WASI and persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-vm-cobalt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The VM: Cobalt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-jit-lifecycle-generate-load-execute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The jit lifecycle: generate, load, execute
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The jit lifecycle: generate, load, execute">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-generate-a-chunk-is-just-a-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Generate — a chunk is just a string
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-load-loadstring-does-the-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Load — loadstring does the work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-execute-its-just-a-lua-function" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Execute — it's just a Lua function
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#all-three-steps-by-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        All three steps, by hand
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-watchdog-yielding-or-dying" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog: yielding or dying
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#distribution-one-file-over-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distribution: one file over HTTP
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-is-worth-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this is worth it
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cobalt-and-computercraft">Cobalt and ComputerCraft<a class="headerlink" href="#cobalt-and-computercraft" title="Permanent link">&para;</a></h1>
+<p>The engine's primary target is a computer inside Minecraft. That target
+shapes the codebase more than WebAssembly does.</p>
+<h2 id="the-vm-cobalt">The VM: Cobalt<a class="headerlink" href="#the-vm-cobalt" title="Permanent link">&para;</a></h2>
+<p>CC:Tweaked embeds <a href="https://github.com/SquidDev/Cobalt">Cobalt</a>, a Java
+reimplementation of <strong>Lua 5.1</strong> with <code>bit32</code> added. Three consequences:</p>
+<p><strong>The whole codebase is written in the 5.1 subset.</strong> No integer division
+operator, no bitwise operators, no <code>goto</code>, no integers at all — even when
+running on Lua 5.4 locally, the code restricts itself to what Cobalt parses.
+The one exception, <code>bit_native.lua</code> (a faster bit library using 5.3
+operators), is embedded in the bundle as a <em>string</em> and <code>load()</code>-ed only on
+VMs that can parse it; Cobalt uses its native <code>bit32</code> instead via the
+<code>bit.lua</code> shim.</p>
+<p><strong>Lua 5.1 bytecode is a usable compilation target.</strong> This is the unlock for
+the jit: Cobalt's loader accepts standard 5.1 chunks, so wasm functions can
+become native Lua functions. It's also why the jit doesn't travel — 5.4 and
+LuaJIT changed their bytecode formats.</p>
+<p><strong>Local green isn't green.</strong> <code>tools/cobalt</code> runs any script on the real
+standalone jar (via a small Java harness, <code>CobaltRunner.java</code>), and
+<code>tools/test</code> runs every test on both VMs. <code>test/probe_cobalt.lua</code> documents
+the observed differences. A change only counts when both columns pass.</p>
+<h2 id="the-jit-lifecycle-generate-load-execute">The jit lifecycle: generate, load, execute<a class="headerlink" href="#the-jit-lifecycle-generate-load-execute" title="Permanent link">&para;</a></h2>
+<p>The whole bytecode trick is three ordinary-looking steps. (How the compiler
+<em>translates</em> wasm — registers, helpers, trampolines — is covered in
+<a href="../architecture/">Architecture</a>; this is the Cobalt-facing mechanics.)</p>
+<h3 id="1-generate-a-chunk-is-just-a-string">1. Generate — a chunk is just a string<a class="headerlink" href="#1-generate-a-chunk-is-just-a-string" title="Permanent link">&para;</a></h3>
+<p><code>src/luabc.lua</code> assembles Lua 5.1 instructions by integer arithmetic — each
+is one 32-bit word with the opcode and operands packed into bit fields —
+and prefixes the 12-byte header Cobalt's <code>BytecodeLoader</code> checks
+(<code>\27Lua</code>, version 5.1, little-endian, 4-byte ints, 8-byte doubles):</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua</span>
+<span class="c1">-- instruction layout: op[0:6] A[6:14] C[14:23] B[23:32]</span>
+<span class="kd">local</span><span class="w"> </span><span class="kr">function</span><span class="w"> </span><span class="nf">iABC</span><span class="p">(</span><span class="nv">op</span><span class="p">,</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">,</span><span class="w"> </span><span class="nv">c</span><span class="p">)</span><span class="w"> </span><span class="kr">return</span><span class="w"> </span><span class="nf">u32</span><span class="p">(</span><span class="nv">op</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">64</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">c</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">16384</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8388608</span><span class="p">)</span><span class="w"> </span><span class="kr">end</span>
+
+<span class="kd">local</span><span class="w"> </span><span class="nv">HEADER</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">string.char</span><span class="p">(</span><span class="mh">0x1b</span><span class="p">,</span><span class="w"> </span><span class="mh">0x4c</span><span class="p">,</span><span class="w"> </span><span class="mh">0x75</span><span class="p">,</span><span class="w"> </span><span class="mh">0x61</span><span class="p">,</span><span class="w"> </span><span class="mh">0x51</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<p>Each wasm function compiles to one chunk: a tiny <em>factory</em> proto whose only
+child is the translated function. The factory exists to bind the runtime
+environment — calling it with ENV returns the wasm function as a closure
+capturing ENV as its single upvalue:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/luabc.lua — wrap a compiled wasm function in function(ENV) return fn end</span>
+<span class="kr">function</span><span class="w"> </span><span class="nc">M</span><span class="p">.</span><span class="nf">loadable</span><span class="p">(</span><span class="nv">wasmfn</span><span class="p">)</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">child</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">wasmfn</span><span class="p">:</span><span class="nf">build</span><span class="p">()</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">fac</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">M</span><span class="p">.</span><span class="nf">func</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w">          </span><span class="c1">-- param 0 = ENV</span>
+<span class="w">  </span><span class="kd">local</span><span class="w"> </span><span class="nv">idx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">fac</span><span class="p">:</span><span class="nf">add_child</span><span class="p">(</span><span class="nv">child</span><span class="p">)</span>
+<span class="w">  </span><span class="nv">fac</span><span class="p">:</span><span class="nf">CLOSURE</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">idx</span><span class="p">)</span><span class="w">               </span><span class="c1">-- R1 = closure(child)</span>
+<span class="w">  </span><span class="nv">fac</span><span class="p">:</span><span class="nf">_emit</span><span class="p">(</span><span class="nf">iABC</span><span class="p">(</span><span class="nv">OP</span><span class="p">.</span><span class="py">MOVE</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="c1">-- upvalue binding: upval0 := ENV</span>
+<span class="w">  </span><span class="nv">fac</span><span class="p">:</span><span class="nf">RETURN</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span>
+<span class="w">  </span><span class="kr">return</span><span class="w"> </span><span class="nv">HEADER</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="nv">fac</span><span class="p">:</span><span class="nf">build</span><span class="p">()</span>
+<span class="kr">end</span>
+</code></pre></div>
+<h3 id="2-load-loadstring-does-the-work">2. Load — <code>loadstring</code> does the work<a class="headerlink" href="#2-load-loadstring-does-the-work" title="Permanent link">&para;</a></h3>
+<p>Lua's standard <code>loadstring</code> accepts binary chunks, and Cobalt implements
+the standard 5.1 format. So loading compiled wasm is one line per function,
+straight from <code>compiler.instantiate</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/compiler.lua</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">loader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">loadstring</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="nb">load</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">ENV</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">runtime</span><span class="p">.</span><span class="nf">make</span><span class="p">(</span><span class="nv">inst</span><span class="p">)</span><span class="w">          </span><span class="c1">-- helpers + memory/globals/funcs/tables</span>
+<span class="p">...</span>
+<span class="nv">inst</span><span class="p">.</span><span class="py">funcs</span><span class="p">[</span><span class="nv">gi</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">loader</span><span class="p">(</span><span class="nv">chunk</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;wasmfn#&quot;</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="nv">gi</span><span class="p">)(</span><span class="nv">ENV</span><span class="p">)</span>
+</code></pre></div>
+<p>This is also exactly why the jit is Cobalt-only: PUC Lua 5.4 and LuaJIT
+changed their bytecode formats and reject the 5.1 header, so
+<code>wasm.instantiate</code> gates on <code>is_cobalt()</code> and falls back to the
+interpreter everywhere else.</p>
+<h3 id="3-execute-its-just-a-lua-function">3. Execute — it's just a Lua function<a class="headerlink" href="#3-execute-its-just-a-lua-function" title="Permanent link">&para;</a></h3>
+<p>There is no dispatch loop, no wasmcraft code on the hot path. The compiled
+function runs on Cobalt's own VM; the only seams back into the engine are
+ENV lookups — including wasm <code>call</code>, which compiles to an ordinary Lua call
+through <code>ENV.funcs</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- src/compiler.lua — wasm `call` becomes GETTABLE + CALL</span>
+<span class="nv">fb</span><span class="p">:</span><span class="nf">GETTABLE</span><span class="p">(</span><span class="nv">fr</span><span class="p">,</span><span class="w"> </span><span class="nv">renv</span><span class="p">,</span><span class="w"> </span><span class="nf">kop</span><span class="p">(</span><span class="nv">fb</span><span class="p">:</span><span class="nf">kstr</span><span class="p">(</span><span class="s2">&quot;funcs&quot;</span><span class="p">)))</span>
+<span class="nv">fb</span><span class="p">:</span><span class="nf">GETTABLE</span><span class="p">(</span><span class="nv">fr</span><span class="p">,</span><span class="w"> </span><span class="nv">fr</span><span class="p">,</span><span class="w"> </span><span class="nf">kop</span><span class="p">(</span><span class="nv">fb</span><span class="p">:</span><span class="nf">knum</span><span class="p">(</span><span class="nv">ins</span><span class="p">.</span><span class="py">func</span><span class="p">)))</span>
+<span class="kr">for</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nv">na</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="kr">do</span><span class="w"> </span><span class="nv">fb</span><span class="p">:</span><span class="nf">MOVE</span><span class="p">(</span><span class="nv">fr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">,</span><span class="w"> </span><span class="nv">argbase</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nv">i</span><span class="p">)</span><span class="w"> </span><span class="kr">end</span>
+<span class="nv">fb</span><span class="p">:</span><span class="nf">CALL</span><span class="p">(</span><span class="nv">fr</span><span class="p">,</span><span class="w"> </span><span class="nv">na</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nv">nr</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="all-three-steps-by-hand">All three steps, by hand<a class="headerlink" href="#all-three-steps-by-hand" title="Permanent link">&para;</a></h3>
+<p>You can drive the pipeline yourself on the standalone Cobalt jar
+(<code>nix-shell --run "tools/cobalt demo.lua"</code> from the repo root):</p>
+<div class="highlight"><pre><span></span><code><span class="nb">package.path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;src/?.lua;&quot;</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="nb">package.path</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">decoder</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="nb">require</span><span class="p">(</span><span class="s2">&quot;decoder&quot;</span><span class="p">)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">compiler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">require</span><span class="p">(</span><span class="s2">&quot;compiler&quot;</span><span class="p">)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">runtime</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="nb">require</span><span class="p">(</span><span class="s2">&quot;runtime&quot;</span><span class="p">)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">Memory</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="nb">require</span><span class="p">(</span><span class="s2">&quot;memory&quot;</span><span class="p">)</span>
+
+<span class="kd">local</span><span class="w"> </span><span class="nv">f</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">assert</span><span class="p">(</span><span class="nb">io.open</span><span class="p">(</span><span class="s2">&quot;wasm/add.wasm&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;rb&quot;</span><span class="p">))</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">mod</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">decoder</span><span class="p">.</span><span class="nf">load</span><span class="p">(</span><span class="nv">f</span><span class="p">:</span><span class="nf">read</span><span class="p">(</span><span class="s2">&quot;*a&quot;</span><span class="p">));</span><span class="w"> </span><span class="nv">f</span><span class="p">:</span><span class="nf">close</span><span class="p">()</span>
+
+<span class="c1">-- 1. generate: wasm function -&gt; a Lua 5.1 binary chunk (a string)</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">chunk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">compiler</span><span class="p">.</span><span class="nf">compile_func</span><span class="p">(</span><span class="nv">mod</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="o">#</span><span class="nv">chunk</span><span class="p">,</span><span class="w"> </span><span class="nv">chunk</span><span class="p">:</span><span class="nf">byte</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">))</span><span class="w">   </span><span class="c1">--&gt; 175   27 76 117 97   (&quot;\27Lua&quot;)</span>
+
+<span class="c1">-- 2. load: Cobalt accepts the chunk; calling the factory binds ENV</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">inst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">funcs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nv">globals</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nv">tables</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nv">memory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">Memory</span><span class="p">.</span><span class="nf">new</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="kd">local</span><span class="w"> </span><span class="nv">add</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nf">loadstring</span><span class="p">(</span><span class="nv">chunk</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;wasmfn#0&quot;</span><span class="p">)(</span><span class="nv">runtime</span><span class="p">.</span><span class="nf">make</span><span class="p">(</span><span class="nv">inst</span><span class="p">))</span>
+
+<span class="c1">-- 3. execute: it is just a Lua function now</span>
+<span class="nb">print</span><span class="p">(</span><span class="nf">add</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">))</span><span class="w">                  </span><span class="c1">--&gt; 5</span>
+</code></pre></div>
+<p>Run the same script under plain <code>lua</code> and step 2 fails — Lua 5.4 won't
+load a 5.1 chunk — which is the entire portability story of the jit in one
+error message.</p>
+<h2 id="the-watchdog-yielding-or-dying">The watchdog: yielding or dying<a class="headerlink" href="#the-watchdog-yielding-or-dying" title="Permanent link">&para;</a></h2>
+<p>CC:Tweaked time-slices all computers cooperatively and <strong>kills</strong> any program
+that runs too long without yielding ("too long without yielding"). A wasm
+engine is exactly such a program, so cooperation is built in at both levels:</p>
+<ul>
+<li><strong>Interpreter:</strong> <code>wasm.set_yield(fn, every)</code> invokes a hook every N
+  instructions. The bundle auto-installs
+  <code>os.queueEvent("wasmcraft_yield"); os.pullEvent("wasmcraft_yield")</code> at
+  200 000 instructions when it detects CC — queueing and pulling a private
+  event resets the watchdog and resumes in the same tick.</li>
+<li><strong>Jit:</strong> compiled code can't count instructions cheaply, so the compiler
+  injects a tick at <strong>loop back-edges</strong> (<code>compiler.yield_in_loops</code>). It is
+  auto-enabled only under CC (detected by <code>os.queueEvent</code> existing);
+  standalone Cobalt leaves it off for full speed.</li>
+</ul>
+<p>This leaks into library design too: the Picat session pump must distinguish
+its own "waiting for stdin" yields from watchdog yields and forward the
+latter to CC's scheduler.</p>
+<h2 id="distribution-one-file-over-http">Distribution: one file over HTTP<a class="headerlink" href="#distribution-one-file-over-http" title="Permanent link">&para;</a></h2>
+<p>CC computers have no <code>package.path</code> and no package manager; what they do
+have is an <code>http</code> API and a global <code>fs</code>. So:</p>
+<ul>
+<li><code>tools/amalgamate</code> flattens all of <code>src/</code> into <code>dist/wasmcraft.lua</code> with a
+  miniature <code>require</code> shim — one file to install.</li>
+<li>The deployable programs (<code>sqlsh</code>, <code>wcsql</code>, <code>picatd</code>, …) each begin with a
+  tiny bootstrap that downloads what's missing from a paste store and finds
+  files across the CC/standalone layouts.</li>
+<li>Caches need invalidation: <code>wasmcraft.version</code> is bumped on publish, and
+  long-lived programs like <code>picatd</code> check it and re-download stale copies
+  ("self-healing").</li>
+</ul>
+<p>The exception is <code>picat.wasm</code> (5.3 MB): too big to fetch casually, so it
+ships on a floppy disk that mounts at <code>/disk/</code> — and the <code>picatd</code>/<code>pic</code>
+split exists precisely so only <strong>one</strong> computer on a network needs that
+floppy.</p>
+<h2 id="why-this-is-worth-it">Why this is worth it<a class="headerlink" href="#why-this-is-worth-it" title="Permanent link">&para;</a></h2>
+<p>Because the payoff is absurd in the best way: real SQLite transactions and
+a real constraint solver running on an in-game computer, written in nothing
+but Lua, surviving chunk unloads, served over in-game wireless. The
+constraints (5.1, doubles, watchdog, whole-file I/O) are what make the
+engineering interesting.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "content.code.copy"], "search": "../../assets/javascripts/workers/search.7a47a382.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.e71a0d61.min.js"></script>
+      
+    
+  </body>
+</html>
