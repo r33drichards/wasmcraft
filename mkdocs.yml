@@ -43,18 +43,20 @@ nav:
       - Install wasmcraft: how-to/install.md
       - Run a wasm module: how-to/run-a-wasm-module.md
       - Embed the engine: how-to/embed-the-engine.md
-      - Use SQLite from Lua: how-to/use-sqlite-from-lua.md
-      - Run Picat programs: how-to/run-picat.md
-      - Run a Picat daemon over rednet: how-to/run-a-picat-daemon.md
       - Run the tests: how-to/run-the-tests.md
       - Rebuild fixtures and the bundle: how-to/rebuild-artifacts.md
+      - Applications:
+          - Use SQLite from Lua: how-to/use-sqlite-from-lua.md
+          - Run Picat programs: how-to/run-picat.md
+          - Run a Picat daemon over rednet: how-to/run-a-picat-daemon.md
   - Reference:
       - Lua API: reference/lua-api.md
       - WASI host: reference/wasi.md
-      - SQL API: reference/sql.md
-      - Picat API: reference/picat.md
       - Command-line tools: reference/cli.md
       - Project layout: reference/project-layout.md
+      - Applications:
+          - SQL API: reference/sql.md
+          - Picat API: reference/picat.md
   - Explanation:
       - Architecture: explanation/architecture.md
       - Cobalt and ComputerCraft: explanation/cobalt-and-computercraft.md

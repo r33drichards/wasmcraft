@@ -2,8 +2,9 @@
 
 A WebAssembly engine written in pure Lua — small enough to drop onto a
 [CC:Tweaked](https://tweaked.cc/) computer in Minecraft, correct enough to run
-real C programs. SQLite and the [Picat](http://picat-lang.org/) constraint
-solver run in-game, compiled to wasm and executed by this engine.
+real C programs. Because it boots unmodified wasi-libc binaries, real software
+follows: SQLite and the [Picat](http://picat-lang.org/) constraint solver run
+in-game as applications *on top of* the engine.
 
 **Docs: <https://r33drichards.github.io/wasmcraft/>**
 
@@ -42,24 +43,31 @@ capabilities verified empirically on Cobalt 0.7.3 (see
 | **i64** (no 64-bit-exact integers) | emulated as `{h, l}` two-word values (`src/int64.lua`) |
 | f32/f64, LEB128, IEEE decode, float reinterpret | `string.pack`/`string.unpack` |
 
-## Highlights
+## The engine
 
 - **Two execution modes.** A portable tree-walking interpreter, and a
   compiler that emits Lua 5.1 bytecode which Cobalt (the Lua VM inside
   CC:Tweaked) runs natively — roughly 7–13× faster. Mode is a flag;
-  the JIT falls back to the interpreter on other VMs automatically.
+  the JIT falls back to the interpreter on other VMs automatically,
+  per-function within a module when one is too large to compile.
 - **WASI preview1 host** with a real filesystem: preopened dirs,
   `path_open`/`fd_read`/`fd_write`/`fd_seek`/filestat/unlink, backed by host
   files (or CC's `fs` API in-game). Enough to boot unmodified wasi-libc
   command modules.
+- **Differentially tested** against wasmtime, on both Lua 5.4 and the real
+  Cobalt VM.
+
+## Built on wasmcraft
+
+These ship in `dist/` as applications on top of the engine — ordinary
+clients of its public API:
+
 - **SQLite in Minecraft.** `csrc/wq.c` wraps SQLite in a wasm reactor with a
   generic query API; `dist/wcsql.lua` exposes it as a tiny Lua library with
   on-disk persistence. `dist/sqlsh.lua` is an interactive SQL shell.
 - **Picat in Minecraft.** Run constraint/planning programs through the 5.3 MB
   `picat.wasm` engine — one-shot, in a warm REPL session, or served to the
   whole rednet network by a resident daemon (`picatd` + `pic` client).
-- **Differentially tested** against wasmtime, on both Lua 5.4 and the real
-  Cobalt VM.
 
 ## Quick start (standalone)
 
