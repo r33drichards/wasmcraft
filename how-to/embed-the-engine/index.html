@@ -1464,8 +1464,12 @@ calling exports, and reading/writing linear memory.</p>
 <span class="kd">local</span><span class="w"> </span><span class="nv">inst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">wasm</span><span class="p">.</span><span class="nf">instantiate</span><span class="p">(</span><span class="nv">module</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;interp&quot;</span><span class="w"> </span><span class="p">})</span>
 <span class="nb">print</span><span class="p">(</span><span class="nv">inst</span><span class="p">:</span><span class="nf">call</span><span class="p">(</span><span class="s2">&quot;add&quot;</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">))</span><span class="w">                         </span><span class="c1">--&gt; 5</span>
 </code></pre></div>
-<p><code>mode = "jit"</code> compiles to Lua 5.1 bytecode on Cobalt and silently falls
-back to the interpreter elsewhere, so it is always safe to request.</p>
+<p>Modes are explicit contracts: <code>"interp"</code> (default) runs anywhere;
+<code>"transpile"</code> compiles to Lua <em>source</em>, which loads on every CC build;
+<code>"jit"</code> compiles to Lua 5.1 bytecode and <strong>errors loudly</strong> on VMs that
+refuse binary chunks (CC:Tweaked &gt;= 1.109) — probe with <code>wasmcraft.can_jit()</code>.
+Opt-in <code>"auto"</code> picks the fastest available (jit -&gt; transpile -&gt; interp) and
+reports the choice via <code>inst.mode</code>.</p>
 <h2 id="supply-imports">Supply imports<a class="headerlink" href="#supply-imports" title="Permanent link">&para;</a></h2>
 <p>Imports are a two-level table: <code>imports[module_name][field_name]</code>. A WASI
 host is just a prebuilt import module:</p>

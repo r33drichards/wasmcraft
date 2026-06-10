@@ -1386,8 +1386,15 @@ with no boot cost and no local <code>picat.wasm</code>.</p>
 (typically a floppy at <code>/disk/picat.wasm</code> — see
 <a href="../run-picat/">Run Picat programs</a>). Install and run:</p>
 <div class="highlight"><pre><span></span><code>wget https://github.com/r33drichards/wasmcraft/releases/latest/download/picatd.lua picatd
-picatd --install [name]
+picatd --mode transpile --install [name]
 </code></pre></div>
+<p><code>--mode &lt;interp|jit|transpile|auto&gt;</code> picks the engine for every session and is
+EXPLICIT (default <code>jit</code>). On servers that refuse Lua bytecode (CC:Tweaked</p>
+<blockquote>
+<p>= 1.109 — most modern servers) <code>jit</code> errors loudly at session boot: use
+<code>--mode transpile</code>, which compiles to Lua source at the same speed. The mode
+survives <code>--install</code> and shows on the dashboard header.</p>
+</blockquote>
 <p>(<code>--install</code> writes a <code>startup.lua</code> so the daemon relaunches after
 chunk-unload reboots; omit it for a one-off run.)</p>
 <p><code>name</code> defaults to the computer's label (else <code>"picat"</code>). The daemon:</p>

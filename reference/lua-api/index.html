@@ -1587,8 +1587,8 @@ instantiations.</p>
 </tr>
 <tr>
 <td><code>opts.mode</code></td>
-<td><code>"interp"</code> (default) | <code>"jit"</code></td>
-<td><code>"jit"</code> compiles to Lua 5.1 bytecode on Cobalt; on any other VM it silently falls back to the interpreter</td>
+<td><code>"interp"</code> (default) | <code>"transpile"</code> | <code>"jit"</code> | <code>"auto"</code></td>
+<td><code>"transpile"</code> emits Lua <em>source</em> (loads on every CC build). <code>"jit"</code> is STRICT bytecode - it errors loudly where binary chunks are refused (probe: <code>wasmcraft.can_jit()</code>). <code>"auto"</code> opts into fastest-available (jit -&gt; transpile -&gt; interp); <code>inst.mode</code> reports what ran</td>
 </tr>
 <tr>
 <td><code>opts.chunk_cache</code></td>

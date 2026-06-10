@@ -1436,11 +1436,13 @@ instead of interpreting it:</p>
 </code></pre></div>
 <p>For a module this small you won't feel the difference, so try something
 heavier — SQLite creating a table, inserting, and querying:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">time</span><span class="w"> </span>tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>wasm/sqlite.wasm<span class="w">        </span><span class="c1"># interpreted</span>
-<span class="nb">time</span><span class="w"> </span>tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>--jit<span class="w"> </span>wasm/sqlite.wasm<span class="w">  </span><span class="c1"># compiled, ~7-13x faster</span>
+<div class="highlight"><pre><span></span><code><span class="nb">time</span><span class="w"> </span>tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>wasm/sqlite.wasm<span class="w">              </span><span class="c1"># interpreted</span>
+<span class="nb">time</span><span class="w"> </span>tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>--jit<span class="w"> </span>wasm/sqlite.wasm<span class="w">        </span><span class="c1"># bytecode, ~7-13x faster</span>
+<span class="nb">time</span><span class="w"> </span>tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>--transpile<span class="w"> </span>wasm/sqlite.wasm<span class="w">  </span><span class="c1"># Lua source, same ballpark</span>
 </code></pre></div>
-<p>The <code>--jit</code> flag is safe everywhere: on VMs that can't load Lua 5.1 bytecode
-(like Lua 5.4) it silently falls back to the interpreter.</p>
+<p>Modes are explicit: <code>--jit</code> errors loudly on VMs that refuse Lua 5.1 bytecode
+(Lua 5.4, CC:Tweaked &gt;= 1.109) — use <code>--transpile</code> there (source loads
+everywhere), or opt into <code>--auto</code> to pick the fastest available.</p>
 <h2 id="5-run-the-test-suite">5. Run the test suite<a class="headerlink" href="#5-run-the-test-suite" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>tools/test
 </code></pre></div>

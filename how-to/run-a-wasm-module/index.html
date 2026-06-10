@@ -1363,25 +1363,33 @@ built with <code>zig cc -target wasm32-wasi</code> or wasi-sdk) from the command
 <div class="highlight"><pre><span></span><code><span class="c1"># portable interpreter (works on any Lua)</span>
 lua<span class="w"> </span>run.lua<span class="w"> </span>wasm/hello.wasm<span class="w"> </span>arg1<span class="w"> </span>arg2
 
-<span class="c1"># on Cobalt, JIT-compiled (~7-13x faster)</span>
+<span class="c1"># compiled to Lua source (loads everywhere, incl. CC:T &gt;= 1.109)</span>
+tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>--transpile<span class="w"> </span>wasm/hello.wasm<span class="w"> </span>arg1<span class="w"> </span>arg2
+
+<span class="c1"># compiled to Lua 5.1 bytecode (errors loudly where bytecode is refused)</span>
 tools/cobalt<span class="w"> </span>run.lua<span class="w"> </span>--jit<span class="w"> </span>wasm/hello.wasm<span class="w"> </span>arg1<span class="w"> </span>arg2
 </code></pre></div>
-<p>Flags:</p>
+<p>Mode flags (mutually exclusive, last one wins):</p>
 <ul>
-<li><code>--jit</code> (alias <code>--compile</code>) — compile functions to Lua 5.1 bytecode.
-  Cobalt only; other VMs fall back to the interpreter automatically.</li>
-<li><code>--interp</code> — force the interpreter (the default).</li>
+<li><code>--interp</code> — the interpreter (default); runs on any Lua.</li>
+<li><code>--transpile</code> — compile functions to Lua <em>source</em>. Loads on every CC build
+  and on lua5.4; on a Picat workload it benchmarks at parity with bytecode.</li>
+<li><code>--jit</code> (alias <code>--compile</code>) — compile to Lua 5.1 bytecode. STRICT: errors
+  loudly on VMs that refuse binary chunks (CC:Tweaked &gt;= 1.109).</li>
+<li><code>--auto</code> — opt-in fastest available: jit if loadable, else transpile, else
+  the interpreter.</li>
 </ul>
 <p>Program arguments after the module path are passed through as WASI argv,
 with the module path as <code>argv[0]</code>.</p>
 <h2 id="in-computercraft">In ComputerCraft<a class="headerlink" href="#in-computercraft" title="Permanent link">&para;</a></h2>
 <p>The amalgamated bundle doubles as a runner program. With <code>dist/wasmcraft.lua</code>
 on the computer as <code>wasmcraft</code>:</p>
-<div class="highlight"><pre><span></span><code>wasmcraft --jit mymodule.wasm arg1 arg2
+<div class="highlight"><pre><span></span><code>wasmcraft --transpile mymodule.wasm arg1 arg2
 </code></pre></div>
-<p>Use <code>--jit</code> in-game: Cobalt loads the emitted bytecode natively and the
-compiler injects yields at loop back-edges, so long runs don't trip CC's
-"too long without yielding" watchdog.</p>
+<p>Use <code>--transpile</code> in-game: CC:Tweaked &gt;= 1.109 refuses to load bytecode, so
+<code>--jit</code> errors loudly on modern servers (check yours with the bctest probe or
+<code>wasmcraft.can_jit()</code>). Both compiled modes inject yields at loop back-edges,
+so long runs don't trip CC's "too long without yielding" watchdog.</p>
 <h2 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h2>
 <p>A module calling <code>proc_exit</code> unwinds cleanly. <code>run.lua</code> and the bundle print
 <code>[module exited with code N]</code> for nonzero exits; from the library API,

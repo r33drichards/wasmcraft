@@ -974,10 +974,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#runlua-luatoolscobalt-runlua-jit-modulewasm-args" class="md-nav__link">
+  <a href="#runlua-luatoolscobalt-runlua-mode-modulewasm-args" class="md-nav__link">
     <span class="md-ellipsis">
       
-        run.lua — [lua|tools/cobalt] run.lua [--jit] &lt;module.wasm&gt; [args...]
+        run.lua — [lua|tools/cobalt] run.lua [mode] &lt;module.wasm&gt; [args...]
       
     </span>
   </a>
@@ -1002,10 +1002,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#wasmcraft-jit-modulewasm-args" class="md-nav__link">
+  <a href="#wasmcraft-interp-transpile-jit-modulewasm-args" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wasmcraft [--jit] &lt;module.wasm&gt; [args]
+        wasmcraft [--interp|--transpile|--jit] &lt;module.wasm&gt; [args]
       
     </span>
   </a>
@@ -1470,10 +1470,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#runlua-luatoolscobalt-runlua-jit-modulewasm-args" class="md-nav__link">
+  <a href="#runlua-luatoolscobalt-runlua-mode-modulewasm-args" class="md-nav__link">
     <span class="md-ellipsis">
       
-        run.lua — [lua|tools/cobalt] run.lua [--jit] &lt;module.wasm&gt; [args...]
+        run.lua — [lua|tools/cobalt] run.lua [mode] &lt;module.wasm&gt; [args...]
       
     </span>
   </a>
@@ -1498,10 +1498,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#wasmcraft-jit-modulewasm-args" class="md-nav__link">
+  <a href="#wasmcraft-interp-transpile-jit-modulewasm-args" class="md-nav__link">
     <span class="md-ellipsis">
       
-        wasmcraft [--jit] &lt;module.wasm&gt; [args]
+        wasmcraft [--interp|--transpile|--jit] &lt;module.wasm&gt; [args]
       
     </span>
   </a>
@@ -1616,14 +1616,22 @@ toolchains via <code>nix shell</code> when not on PATH.</p>
 <h3 id="toolsamalgamate"><code>tools/amalgamate</code><a class="headerlink" href="#toolsamalgamate" title="Permanent link">&para;</a></h3>
 <p>Produce <code>dist/wasmcraft.lua</code> — all of <code>src/</code> inlined into one file with a
 <code>require</code> shim, deployable to CC.</p>
-<h3 id="runlua-luatoolscobalt-runlua-jit-modulewasm-args"><code>run.lua</code> — <code>[lua|tools/cobalt] run.lua [--jit] &lt;module.wasm&gt; [args...]</code><a class="headerlink" href="#runlua-luatoolscobalt-runlua-jit-modulewasm-args" title="Permanent link">&para;</a></h3>
-<p>Run a WASI command module from the repo. <code>--jit</code> (alias <code>--compile</code>)
-compiles to bytecode on Cobalt; <code>--interp</code> forces the interpreter (default).</p>
+<h3 id="runlua-luatoolscobalt-runlua-mode-modulewasm-args"><code>run.lua</code> — <code>[lua|tools/cobalt] run.lua [mode] &lt;module.wasm&gt; [args...]</code><a class="headerlink" href="#runlua-luatoolscobalt-runlua-mode-modulewasm-args" title="Permanent link">&para;</a></h3>
+<p>Run a WASI command module from the repo. Mode flags are mutually exclusive
+(last one wins):</p>
+<ul>
+<li><code>--interp</code> — tree-walking interpreter (default; runs anywhere)</li>
+<li><code>--transpile</code> — compile to Lua <em>source</em> (text chunks load on every CC build)</li>
+<li><code>--jit</code> (alias <code>--compile</code>) — Lua 5.1 bytecode. STRICT: errors loudly on VMs
+  that refuse binary chunks (CC:Tweaked &gt;= 1.109) instead of substituting</li>
+<li><code>--auto</code> — opt-in fastest-available: jit if loadable, else transpile, else
+  interp (the instance reports what ran via <code>inst.mode</code>)</li>
+</ul>
 <h2 id="deployable-programs-dist-run-on-a-cc-computer">Deployable programs (<code>dist/</code>, run on a CC computer)<a class="headerlink" href="#deployable-programs-dist-run-on-a-cc-computer" title="Permanent link">&para;</a></h2>
 <p>All of these self-bootstrap over HTTP on first run (interpreter bundle, and
 where needed <code>wq.wasm</code> / the picat library) — except <code>picat.wasm</code>, which is
 large and must be provided (typically a floppy at <code>/disk/picat.wasm</code>).</p>
-<h3 id="wasmcraft-jit-modulewasm-args"><code>wasmcraft [--jit] &lt;module.wasm&gt; [args]</code><a class="headerlink" href="#wasmcraft-jit-modulewasm-args" title="Permanent link">&para;</a></h3>
+<h3 id="wasmcraft-interp-transpile-jit-modulewasm-args"><code>wasmcraft [--interp|--transpile|--jit] &lt;module.wasm&gt; [args]</code><a class="headerlink" href="#wasmcraft-interp-transpile-jit-modulewasm-args" title="Permanent link">&para;</a></h3>
 <p>The bundle as a runner program. Loaded via <code>loadfile</code> instead, it returns
 the <a href="../lua-api/#bundle-extras-distwasmcraftlua">library API</a>.</p>
 <h3 id="sqlsh-dbfile"><code>sqlsh [dbfile]</code><a class="headerlink" href="#sqlsh-dbfile" title="Permanent link">&para;</a></h3>
