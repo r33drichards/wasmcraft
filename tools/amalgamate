@@ -82,8 +82,8 @@ local function cc_hostfs(root)
     return root == "" and p or fs.combine(root, p)
   end
   return {
-    read = function(p) p = full(p); if not fs.exists(p) then return nil end local h = fs.open(p, "rb"); local d = h.readAll(); h.close(); return d end,
-    write = function(p, d) p = full(p); local h = fs.open(p, "wb"); h.write(d); h.close() end,
+    read = function(p) p = full(p); if not fs.exists(p) or fs.isDir(p) then return nil end local h = fs.open(p, "rb"); if not h then return nil end local d = h.readAll(); h.close(); return d end,
+    write = function(p, d) p = full(p); local h, e = fs.open(p, "wb"); if not h then error("hostfs write " .. p .. ": " .. tostring(e), 0) end h.write(d); h.close() end,
     exists = function(p) return fs.exists(full(p)) end,
     size = function(p) p = full(p); if not fs.exists(p) then return nil end return fs.getSize(p) end,
     unlink = function(p) p = full(p); if fs.exists(p) then fs.delete(p) end end,
