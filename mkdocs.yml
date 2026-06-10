@@ -40,6 +40,7 @@ nav:
       - Getting started: tutorials/getting-started.md
       - SQLite in ComputerCraft: tutorials/sqlite-in-computercraft.md
   - How-to guides:
+      - Install wasmcraft: how-to/install.md
       - Run a wasm module: how-to/run-a-wasm-module.md
       - Embed the engine: how-to/embed-the-engine.md
       - Use SQLite from Lua: how-to/use-sqlite-from-lua.md

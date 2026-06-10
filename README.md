@@ -63,7 +63,15 @@ capabilities verified empirically on Cobalt 0.7.3 (see
 
 ## Quick start (standalone)
 
-Everything is driven through nix:
+No repo needed — wasmcraft is a single pure-Lua file. On any Lua 5.3/5.4:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/r33drichards/wasmcraft/master/dist/wasmcraft.lua
+lua wasmcraft.lua hello.wasm
+```
+
+See the [install guide](https://r33drichards.github.io/wasmcraft/how-to/install/)
+for library usage and SQLite. From a checkout, everything is driven through nix:
 
 ```sh
 # run a WASI module on Lua 5.4
