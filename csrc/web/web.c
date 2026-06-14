@@ -164,8 +164,11 @@ static char *js_buf = NULL;
 static int js_len = 0, js_cap = 0;
 static void js_append(const char *s, int len) {
   if (js_len + len + 2 > js_cap) {
-    js_cap = (js_len + len + 2) * 2;
-    js_buf = realloc(js_buf, js_cap);
+    int new_cap = (js_len + len + 2) * 2;
+    char *nb = realloc(js_buf, new_cap);
+    if (!nb) { fprintf(stderr, "web: out of memory while buffering <script>\n"); return; }
+    js_buf = nb;
+    js_cap = new_cap;
   }
   memcpy(js_buf + js_len, s, len); js_len += len;
   js_buf[js_len++] = '\n'; js_buf[js_len] = 0;
