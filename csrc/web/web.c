@@ -121,7 +121,10 @@ static char *astr(const char *s, int len) {
 }
 
 static int newnode(int is_elem) {
-  if (nnodes >= MAXNODES) return nnodes - 1;
+  if (nnodes >= MAXNODES) {
+    fprintf(stderr, "web: DOM node limit (%d) exceeded\n", MAXNODES);
+    exit(1);
+  }
   int i = nnodes++;
   memset(&N[i], 0, sizeof N[i]);
   N[i].is_elem = is_elem;
