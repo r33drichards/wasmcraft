@@ -37,16 +37,21 @@ cp dist/browser.lua "$PROG/browser.lua"
 cp dist/webrender.lua "$PROG/webrender.lua"
 cp dist/wasmcraft.lua "$PROG/wasmcraft"
 cp wasm/web.wasm "$PROG/web.wasm"
-cp "$PAGE" "$PROG/site/index.html"
+# copy the page's whole directory so linked .css/.js (e.g. a React app.js) come
+# along; render the named page file.
+PAGEDIR="$(cd "$(dirname "$PAGE")" && pwd)"; PAGEFILE="$(basename "$PAGE")"
+cp -r "$PAGEDIR"/. "$PROG/site/" 2>/dev/null || cp "$PAGE" "$PROG/site/$PAGEFILE"
 
-cat > "$PROG/harness.lua" <<'LUA'
+# MODE is a browser.lua execution flag; --jit is needed for JS/React-heavy pages.
+MODE="${MODE:-}"
+cat > "$PROG/harness.lua" <<LUA
 for _, f in ipairs(fs.list("/prog")) do
   if f ~= "harness.lua" and not fs.exists("/" .. f) then pcall(fs.copy, "/prog/" .. f, "/" .. f) end
 end
 local w, h = term.getSize()
 local win = window.create(term.current(), 1, 1, w, h, true)
 local old = term.redirect(win)
-local ok, err = pcall(function() shell.run("/browser.lua", "/site") end)
+local ok, err = pcall(function() shell.run("/browser.lua"${MODE:+, "$MODE"}, "/site/$PAGEFILE") end)
 term.redirect(old)
 local fh = fs.open("/out/blit.tsv", "w")
 for y = 1, h do local t, f, b = win.getLine(y); fh.write((t or "").."\t"..(f or "").."\t"..(b or "").."\n") end
@@ -62,10 +67,12 @@ CDIR="$(cd "$(dirname "$CRAFTOS")" && pwd)"
 export LD_LIBRARY_PATH="$CDIR/craftos2-lua/src:${LD_LIBRARY_PATH:-}"
 PROG="$(cd "$PROG" && pwd)"; OUTDIR="$(cd "$OUTDIR" && pwd)"; DATA="$(cd "$DATA" && pwd)"
 CCROM="$(cd "$CCROM" && pwd)"
-( cd "$CDIR" && timeout 120 "./$(basename "$CRAFTOS")" --headless --rom "$CCROM" -d "$DATA" \
+# JS/React pages take tens of seconds even under --jit; allow a generous budget.
+TIMEOUT="${TIMEOUT:-120}"
+( cd "$CDIR" && timeout "$TIMEOUT" "./$(basename "$CRAFTOS")" --headless --rom "$CCROM" -d "$DATA" \
     --mount-ro /prog="$PROG" --mount-rw /out="$OUTDIR" --script "$PROG/harness.lua" >/dev/null 2>&1 ) &
 CPID=$!
-for _ in $(seq 1 60); do [ -s "$OUTDIR/blit.tsv" ] && break; kill -0 $CPID 2>/dev/null || break; sleep 2; done
+for _ in $(seq 1 "$TIMEOUT"); do [ -s "$OUTDIR/blit.tsv" ] && break; kill -0 $CPID 2>/dev/null || break; sleep 1; done
 kill $CPID 2>/dev/null || true; wait $CPID 2>/dev/null || true
 [ -f "$OUTDIR/err.txt" ] && { echo "browser error: $(cat "$OUTDIR/err.txt")"; }
 [ -s "$OUTDIR/blit.tsv" ] || { echo "no capture produced"; exit 1; }
