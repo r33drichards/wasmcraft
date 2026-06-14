@@ -25,3 +25,6 @@ csrc/sqlite3.h
 .wasmcraft_sqltest.db
 .planner_state
 .planner_result
+
+# wasmcraft web: cc-screenshot output
+/out/
