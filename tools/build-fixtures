@@ -26,6 +26,8 @@ build() {
   echo "== compiling C fixtures =="
   zig cc -target wasm32-wasi -Os -o wasm/hello.wasm   csrc/hello.c
   zig cc -target wasm32-wasi -Os -o wasm/compute.wasm csrc/compute.c
+  echo "== compiling web engine (Stage 0: draw-protocol demo) =="
+  zig cc -target wasm32-wasi -Os -Icsrc/web -o wasm/web.wasm csrc/web/mvp.c
   local SQLITE_FLAGS="-DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
     -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_WAL -DSQLITE_TEMP_STORE=3"
   echo "== compiling SQLite demo command module (~15s) =="
