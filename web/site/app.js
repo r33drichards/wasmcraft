@@ -5484,7 +5484,9 @@
     (e) => console.log("recoverable", e + ""),
     null
   );
-  reconciler.updateContainer(import_react2.default.createElement(Counter), container, null, null);
+  reconciler.flushSync(() => {
+    reconciler.updateContainer(import_react2.default.createElement(Counter), container, null, null);
+  });
 })();
 /*! Bundled license information:
 

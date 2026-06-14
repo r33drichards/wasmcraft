@@ -673,6 +673,18 @@ static void js_run(void) {
   JS_SetPropertyStr(ctx, glob, "console", con);
   JS_FreeValue(ctx, glob);
 
+  // minimal timer shims: there is no macrotask event loop, so map timers onto
+  // the microtask queue (drained below). Enough for React's scheduler and for
+  // scripts that defer work; one-shot rendering doesn't need real delays.
+  static const char *PRELUDE =
+    "globalThis.setTimeout=function(f){if(typeof f==='function')Promise.resolve().then(f);return 0;};"
+    "globalThis.clearTimeout=function(){};"
+    "globalThis.setInterval=function(){return 0;};"
+    "globalThis.clearInterval=function(){};"
+    "globalThis.queueMicrotask=globalThis.queueMicrotask||function(f){Promise.resolve().then(f);};";
+  JSValue pr = JS_Eval(ctx, PRELUDE, strlen(PRELUDE), "<prelude>", JS_EVAL_TYPE_GLOBAL);
+  JS_FreeValue(ctx, pr);
+
   JSValue r = JS_Eval(ctx, js_buf, js_len, "<script>", JS_EVAL_TYPE_GLOBAL);
   if (JS_IsException(r)) {
     JSValue e = JS_GetException(ctx);

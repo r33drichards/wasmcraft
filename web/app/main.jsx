@@ -78,4 +78,9 @@ const root = document.getElementById("root");
 const container = reconciler.createContainer(
   root, 0, null, false, null, "", (e) => console.log("recoverable", e + ""), null
 );
-reconciler.updateContainer(React.createElement(Counter), container, null, null);
+// flushSync forces React to render AND commit synchronously — the engine has no
+// macrotask scheduler (no setTimeout/MessageChannel), so deferred work wouldn't
+// otherwise run before we lay the page out.
+reconciler.flushSync(() => {
+  reconciler.updateContainer(React.createElement(Counter), container, null, null);
+});
