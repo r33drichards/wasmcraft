@@ -33,6 +33,9 @@ fetch_quickjs() {
            dirent_compat.h; do
     cp "vendor/quickjs-${QJS_VER}/$f" "csrc/web/quickjs/$f" 2>/dev/null || true
   done
+  for req in quickjs.c quickjs.h libregexp.c libunicode.c cutils.c xsum.c; do
+    [ -f "csrc/web/quickjs/$req" ] || { echo "QuickJS fetch failed: missing $req"; exit 1; }
+  done
 }
 
 build() {
