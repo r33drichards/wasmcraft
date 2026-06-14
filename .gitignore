@@ -31,3 +31,6 @@ csrc/web/quickjs/
 
 # wasmcraft web: cc-screenshot output
 /out/
+
+# react bundler toolchain (regenerable)
+/.web-build/

@@ -155,14 +155,17 @@ static void css_append(const char *s, int len) {
   if (css_len + len + 1 < (int)sizeof css_buf) { memcpy(css_buf + css_len, s, len); css_len += len; css_buf[css_len] = 0; }
 }
 
-// collected <script> source (inline + external src), run after layout styling
-static char js_buf[1 << 16];
-static int js_len = 0;
+// collected <script> source (inline + external src), run after layout styling.
+// Grown dynamically — bundled apps (React) are hundreds of KB.
+static char *js_buf = NULL;
+static int js_len = 0, js_cap = 0;
 static void js_append(const char *s, int len) {
-  if (js_len + len + 2 < (int)sizeof js_buf) {
-    memcpy(js_buf + js_len, s, len); js_len += len;
-    js_buf[js_len++] = '\n'; js_buf[js_len] = 0;
+  if (js_len + len + 2 > js_cap) {
+    js_cap = (js_len + len + 2) * 2;
+    js_buf = realloc(js_buf, js_cap);
   }
+  memcpy(js_buf + js_len, s, len); js_len += len;
+  js_buf[js_len++] = '\n'; js_buf[js_len] = 0;
 }
 
 static void lower(char *s) { for (; *s; s++) *s = tolower((unsigned char)*s); }
@@ -447,8 +450,25 @@ static void set_attr(int n, const char *name, const char *val) {
   }
 }
 static void set_text_content(int n, const char *s) {
+  if (!N[n].is_elem) { N[n].text = astr(s, (int)strlen(s)); return; }  // text node
   N[n].child = -1;                       // drop existing children (nodes leak; fine)
   int t = newnode(0); N[t].text = astr(s, (int)strlen(s)); add_child(n, t);
+}
+// unlink child from parent's sibling list
+static void remove_child(int parent, int child) {
+  int c = N[parent].child;
+  if (c == child) N[parent].child = N[child].sibling;
+  else { while (c >= 0 && N[c].sibling != child) c = N[c].sibling; if (c >= 0) N[c].sibling = N[child].sibling; }
+  N[child].sibling = -1; N[child].parent = -1;
+}
+// insert `child` (assumed detached) before `ref`; ref<0 appends
+static void insert_before(int parent, int child, int ref) {
+  N[child].parent = parent; N[child].sibling = -1;
+  if (ref < 0) { add_child(parent, child); return; }
+  if (N[parent].child == ref) { N[child].sibling = ref; N[parent].child = child; return; }
+  int c = N[parent].child;
+  while (c >= 0 && N[c].sibling != ref) c = N[c].sibling;
+  if (c >= 0) { N[child].sibling = ref; N[c].sibling = child; } else add_child(parent, child);
 }
 static void append_inline_style(int n, const char *prop, const char *val) {
   const char *cur = attrval(n, "style");
@@ -495,8 +515,34 @@ static JSValue js_setAttribute(JSContext *ctx, JSValueConst t, int argc, JSValue
 }
 static JSValue js_appendChild(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
   int n = opaque_idx(t, node_cid), c = opaque_idx(argv[0], node_cid);
-  if (n >= 0 && c >= 0) add_child(n, c);
+  if (n >= 0 && c >= 0) { if (N[c].parent >= 0) remove_child(N[c].parent, c); add_child(n, c); }
   return JS_DupValue(ctx, argv[0]);
+}
+static JSValue js_insertBefore(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid), c = opaque_idx(argv[0], node_cid), r = opaque_idx(argv[1], node_cid);
+  if (n >= 0 && c >= 0) { if (N[c].parent >= 0) remove_child(N[c].parent, c); insert_before(n, c, r); }
+  return JS_DupValue(ctx, argv[0]);
+}
+static JSValue js_removeChild(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid), c = opaque_idx(argv[0], node_cid);
+  if (n >= 0 && c >= 0) remove_child(n, c);
+  return JS_DupValue(ctx, argv[0]);
+}
+static JSValue js_get_nodeValue(JSContext *ctx, JSValueConst t) {
+  int n = opaque_idx(t, node_cid);
+  if (n < 0 || N[n].is_elem || !N[n].text) return JS_NULL;
+  return JS_NewString(ctx, N[n].text);
+}
+static JSValue js_set_nodeValue(JSContext *ctx, JSValueConst t, JSValueConst v) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_UNDEFINED;
+  const char *s = JS_ToCString(ctx, v); if (s) { set_text_content(n, s); JS_FreeCString(ctx, s); }
+  return JS_UNDEFINED;
+}
+static JSValue js_createTextNode(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  const char *s = JS_ToCString(ctx, argv[0]);
+  int i = newnode(0); N[i].text = astr(s ? s : "", s ? (int)strlen(s) : 0);
+  if (s) JS_FreeCString(ctx, s);
+  return make_node(ctx, i);
 }
 static JSValue js_addEventListener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
   return JS_UNDEFINED;   // events arrive in Stage 2b (reactor); accepted, no-op now
@@ -578,12 +624,19 @@ static void js_run(void) {
   JS_SetPropertyStr(ctx, np, "getAttribute", JS_NewCFunction(ctx, js_getAttribute, "getAttribute", 1));
   JS_SetPropertyStr(ctx, np, "setAttribute", JS_NewCFunction(ctx, js_setAttribute, "setAttribute", 2));
   JS_SetPropertyStr(ctx, np, "appendChild", JS_NewCFunction(ctx, js_appendChild, "appendChild", 1));
+  JS_SetPropertyStr(ctx, np, "insertBefore", JS_NewCFunction(ctx, js_insertBefore, "insertBefore", 2));
+  JS_SetPropertyStr(ctx, np, "removeChild", JS_NewCFunction(ctx, js_removeChild, "removeChild", 1));
   JS_SetPropertyStr(ctx, np, "addEventListener", JS_NewCFunction(ctx, js_addEventListener, "addEventListener", 2));
   JSAtom a;
   a = JS_NewAtom(ctx, "textContent");
   JS_DefinePropertyGetSet(ctx, np, a,
     JS_NewCFunction2(ctx, (JSCFunction *)js_get_textContent, "get textContent", 0, JS_CFUNC_getter, 0),
     JS_NewCFunction2(ctx, (JSCFunction *)js_set_textContent, "set textContent", 1, JS_CFUNC_setter, 0),
+    JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
+  a = JS_NewAtom(ctx, "nodeValue");
+  JS_DefinePropertyGetSet(ctx, np, a,
+    JS_NewCFunction2(ctx, (JSCFunction *)js_get_nodeValue, "get nodeValue", 0, JS_CFUNC_getter, 0),
+    JS_NewCFunction2(ctx, (JSCFunction *)js_set_nodeValue, "set nodeValue", 1, JS_CFUNC_setter, 0),
     JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
   a = JS_NewAtom(ctx, "style");
   JS_DefinePropertyGetSet(ctx, np, a,
@@ -608,6 +661,7 @@ static void js_run(void) {
   JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_getElementById, "getElementById", 1));
   JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_querySelector, "querySelector", 1));
   JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
+  JS_SetPropertyStr(ctx, doc, "createTextNode", JS_NewCFunction(ctx, js_createTextNode, "createTextNode", 1));
   a = JS_NewAtom(ctx, "body");
   JS_DefinePropertyGetSet(ctx, doc, a,
     JS_NewCFunction2(ctx, (JSCFunction *)js_get_body, "get body", 0, JS_CFUNC_getter, 0),
@@ -628,6 +682,15 @@ static void js_run(void) {
     JS_FreeValue(ctx, e);
   }
   JS_FreeValue(ctx, r);
+
+  // drain the job queue (Promises / microtasks / React's scheduler callbacks)
+  JSContext *ctx1;
+  for (;;) {
+    int rc = JS_ExecutePendingJob(rt, &ctx1);
+    if (rc <= 0) { if (rc < 0) { JSValue e = JS_GetException(ctx1); const char *s = JS_ToCString(ctx1, e);
+        fprintf(stderr, "JS job error: %s\n", s ? s : "?"); if (s) JS_FreeCString(ctx1, s); JS_FreeValue(ctx1, e); } break; }
+  }
+
   JS_FreeContext(ctx);
   JS_FreeRuntime(rt);
 
