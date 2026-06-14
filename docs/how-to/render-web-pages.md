@@ -88,6 +88,25 @@ the engine has no macrotask event loop, `main.jsx` commits synchronously with
 `reconciler.flushSync`; the engine provides microtask-based `setTimeout`
 shims for React's scheduler.
 
+### Interactivity
+
+The engine is a **reactor**: after the first frame it stays alive, and
+`browser.lua` forwards each monitor/terminal tap as a DOM `click` event
+(`monitor_touch`/`mouse_click` → `web_event`). The engine hit-tests the tapped
+cell to the element under it, fires its `onClick`/`addEventListener` handler,
+lets React commit (`reconciler.flushSync`), re-lays out, and repaints — so a
+`useState` counter updates live on the monitor:
+
+```jsx
+const [n, setN] = useState(0);
+return <button onClick={() => setN(n + 1)}>[ + increment ]</button>;
+```
+
+Tap the button on the monitor to increment; press `Q` (or `Ctrl+T`) on the
+computer to quit. Hit-testing is by block-element rectangle, so make tap targets
+block-level (a `<button>` is). Plain-JS `addEventListener("click", …)` works the
+same way.
+
 !!! note "Performance"
     Running React through QuickJS through the pure-Lua interpreter is a
     one-time cost of tens of seconds (use `--jit`). It suits dashboards and
