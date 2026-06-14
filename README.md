@@ -68,6 +68,11 @@ clients of its public API:
 - **Picat in Minecraft.** Run constraint/planning programs through the 5.3 MB
   `picat.wasm` engine — one-shot, in a warm REPL session, or served to the
   whole rednet network by a resident daemon (`picatd` + `pic` client).
+- **A web browser for monitors.** `csrc/web/web.c` parses HTML + CSS and runs
+  JavaScript through an embedded QuickJS, laying a page out onto a CC monitor
+  via `dist/browser.lua`. Real React (function components, hooks, JSX) renders
+  through a custom `react-reconciler`. See
+  [Render web pages](https://r33drichards.github.io/wasmcraft/how-to/render-web-pages/).
 
 ## Quick start (standalone)
 
