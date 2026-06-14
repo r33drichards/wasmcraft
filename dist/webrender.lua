@@ -108,8 +108,11 @@ end
 
 -- Paint a frame to any device exposing CC's term/monitor blit surface
 -- (setCursorPos + blit). Used for both real monitors and the CC terminal.
-function M.paint_blit(dev, fr)
-  for y = 0, fr.rows - 1 do
+-- `maxrows` (optional) clips tall pages to the device height.
+function M.paint_blit(dev, fr, maxrows)
+  local last = fr.rows - 1
+  if maxrows and maxrows - 1 < last then last = maxrows - 1 end
+  for y = 0, last do
     dev.setCursorPos(1, y + 1)
     dev.blit(fr:blitrow(y))
   end

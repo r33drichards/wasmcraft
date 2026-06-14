@@ -26,14 +26,19 @@ enum {
   COL_BROWN = 12, COL_GREEN = 13, COL_RED = 14, COL_BLACK = 15
 };
 
-static inline void draw_size(int cols, int rows) { printf("SIZE %d %d\n", cols, rows); }
-static inline void draw_clear(int bg) { printf("CLEAR %d\n", bg); }
+// When set, the emitters produce no output. Layout makes a "dry" pass with this
+// on to measure page height before emitting the real frame (so SIZE can carry
+// the true height). Per translation unit; left 0 for callers that don't measure.
+static int draw_suppress = 0;
+
+static inline void draw_size(int cols, int rows) { if (!draw_suppress) printf("SIZE %d %d\n", cols, rows); }
+static inline void draw_clear(int bg) { if (!draw_suppress) printf("CLEAR %d\n", bg); }
 static inline void draw_rect(int x, int y, int w, int h, int bg) {
-  printf("RECT %d %d %d %d %d\n", x, y, w, h, bg);
+  if (!draw_suppress) printf("RECT %d %d %d %d %d\n", x, y, w, h, bg);
 }
 static inline void draw_text(int x, int y, int fg, int bg, const char *s) {
-  printf("T %d %d %d %d %s\n", x, y, fg, bg, s);
+  if (!draw_suppress) printf("T %d %d %d %d %s\n", x, y, fg, bg, s);
 }
-static inline void draw_frame_end(void) { printf("FRAME END\n"); }
+static inline void draw_frame_end(void) { if (!draw_suppress) printf("FRAME END\n"); }
 
 #endif

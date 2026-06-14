@@ -1,28 +1,37 @@
--- browser — render a web page (eventually HTML/CSS/JS/React) onto a CC:Tweaked
--- monitor by running a wasm "web engine" through the wasmcraft interpreter and
--- painting the draw protocol it emits (see csrc/web/draw.h).
+-- browser — render a web page (HTML/CSS now; JS/React in later stages) onto a
+-- CC:Tweaked monitor. It runs the wasm "web engine" (web.wasm) through the
+-- wasmcraft interpreter and paints the draw protocol it emits (csrc/web/draw.h).
 --
---   Usage:  browser [--jit|--transpile|--auto] [module.wasm]
---           (module defaults to web.wasm; falls back to the terminal when no
---            monitor is attached, and to plain ASCII off CC entirely)
+--   Usage:  browser [--jit|--transpile|--auto] [--scale N] [--engine M.wasm] [page]
+--           page    an .html file or a directory (default: index.html in cwd);
+--                   the page's directory is mounted so the engine can fopen
+--                   linked .css/.js by relative path.
+--           --scale monitor text scale (0.5..5, default 1); larger = bigger text
+--           --engine override the engine module (defaults to web.wasm)
+--   Falls back to the CC terminal when no monitor is attached, and to plain
+--   ASCII off CC entirely.
 --
--- This is the RENDERING SUBSTRATE for the whole web stack: Stage 0 ships a
--- hand-built page (csrc/web/mvp.c); later stages swap in a real HTML/CSS layout
--- engine and then QuickJS-driven React. None of them change this file — they all
--- speak the same line-based draw protocol, parsed by parse_line() below.
+-- This is the RENDERING SUBSTRATE for the whole web stack: the engine grows from
+-- HTML/CSS to QuickJS-driven React, but it always speaks the same draw protocol,
+-- so this file does not change as the engine gains features.
 local BUNDLE_URL = "https://github.com/r33drichards/wasmcraft/releases/latest/download/wasmcraft.lua"
 
 local args = { ... }
-local mode = "interp"
-while true do
-  if args[1] == "--interp" then mode = "interp"
-  elseif args[1] == "--jit" or args[1] == "--compile" then mode = "jit"
-  elseif args[1] == "--transpile" then mode = "transpile"
-  elseif args[1] == "--auto" then mode = "auto"
-  else break end
-  table.remove(args, 1)
+local mode, scale, engineMod = "interp", 1, "web.wasm"
+local positional = {}
+local i = 1
+while i <= #args do
+  local a = args[i]
+  if a == "--interp" then mode = "interp"
+  elseif a == "--jit" or a == "--compile" then mode = "jit"
+  elseif a == "--transpile" then mode = "transpile"
+  elseif a == "--auto" then mode = "auto"
+  elseif a == "--scale" then i = i + 1; scale = tonumber(args[i]) or 1
+  elseif a == "--engine" then i = i + 1; engineMod = args[i] or engineMod
+  else positional[#positional + 1] = a end
+  i = i + 1
 end
-local MODULE = args[1] or "web.wasm"
+local PAGE_ARG = positional[1]   -- file, dir, or nil
 
 -- ---- locate + load the engine (bundle on CC, src/ in the repo) --------------
 local on_cc = type(fs) == "table" and fs.open ~= nil
@@ -49,9 +58,11 @@ local function load_engine()
   return assert(loadfile(path))()
 end
 
--- run a WASI command module, routing its stdout to `writefn`. Works off both the
--- bundle and the src/ require path (both expose load/instantiate/wasi).
-local function run_wasi(engine, bytes, prog_args, writefn, opts)
+-- run a WASI command module, routing its stdout to `writefn` and mounting `root`
+-- as the preopened directory (so the engine can fopen the page + linked files).
+-- Works off both the bundle and the src/ require path (both expose load/
+-- instantiate/wasi).
+local function run_wasi(engine, bytes, prog_args, writefn, root, opts)
   -- under CC, yield to the event loop periodically so long runs don't trip the
   -- "too long without yielding" watchdog (the bundle installs this itself)
   if engine.set_yield and type(os) == "table" and os.queueEvent and os.pullEvent then
@@ -59,7 +70,13 @@ local function run_wasi(engine, bytes, prog_args, writefn, opts)
   end
   local wasi = engine.wasi
   local module = engine.load(bytes)
-  local host = wasi.make({ write = writefn, writeerr = writefn, args = prog_args })
+  -- mount the site dir: the bundle's hostfs is CC fs-backed (in-game); off CC we
+  -- fall back to wasi's io-based hostfs. Passing fs explicitly avoids wasi.make
+  -- building an io_hostfs that would fail on CC (which has no io.open).
+  local hostfs = (engine.hostfs and engine.hostfs(root or "."))
+              or (wasi.io_hostfs and wasi.io_hostfs(root or "."))
+  local host = wasi.make({ write = writefn, writeerr = writefn, args = prog_args,
+                           fs = hostfs, root = root or "." })
   local inst = engine.instantiate(module, { wasi_snapshot_preview1 = host }, opts)
   local ok, err = pcall(function() inst:call("_start") end)
   if ok then return 0 end
@@ -103,20 +120,48 @@ local function reset_palette(dev)
   end
 end
 
+-- resolve the page argument into a (root dir, page filename) pair. The engine
+-- runs with `root` mounted and fopens `page` (plus any linked files) from it.
+local function resolve_page(arg)
+  if not arg then return ".", "index.html" end
+  local isdir = on_cc and fs.isDir(arg)
+  if not on_cc then  -- off CC: a trailing slash or no .html extension => treat as dir
+    isdir = arg:sub(-1) == "/" or (not arg:match("%.html?$") and not arg:match("%.%w+$"))
+  end
+  if isdir then return (arg:gsub("/$", "")), "index.html" end
+  local dir, file = arg:match("^(.*)[/\\]([^/\\]+)$")
+  if dir then return dir, file end
+  return ".", arg
+end
+
 -- ---- run --------------------------------------------------------------------
 local engine = load_engine()
-local modPath = assert(find({ MODULE, "wasm/" .. MODULE, "dist/" .. MODULE }),
-                       MODULE .. " not found (build it with tools/build-fixtures)")
-local bytes = read_bytes(modPath)
+local enginePath = assert(find({ engineMod, "wasm/" .. engineMod, "dist/" .. engineMod }),
+                          engineMod .. " not found (build it with tools/build-fixtures)")
+local bytes = read_bytes(enginePath)
+
+local root, page = resolve_page(PAGE_ARG)
 
 local kind, dev = pick_device()
 if kind == "monitor" then reset_palette(dev) end
 
+-- the layout width is the device's character width: set the monitor scale first,
+-- then read its size; the engine lays the page out to exactly that many columns.
+local cols, drows = 51, nil
+if kind == "monitor" then
+  dev.setTextScale(scale); cols, drows = dev.getSize()
+elseif kind == "term" then
+  cols, drows = dev.getSize()
+end
+
 local function render(fr)
-  if kind == "monitor" then WR.fit_scale(dev, fr); dev.setBackgroundColor(1); dev.clear(); WR.paint_blit(dev, fr)
-  elseif kind == "term" then WR.paint_blit(dev, fr)
-  else WR.paint_ascii(fr) end
+  if kind == "monitor" or kind == "term" then
+    dev.setBackgroundColor(1); dev.clear()
+    WR.paint_blit(dev, fr, drows)   -- clip to the device height (page may scroll)
+  else
+    WR.paint_ascii(fr)
+  end
 end
 
 local sink = WR.line_sink(WR.make_parser(render))
-run_wasi(engine, bytes, { modPath }, sink, { mode = mode })
+run_wasi(engine, bytes, { page, page, tostring(cols) }, sink, root, { mode = mode })
