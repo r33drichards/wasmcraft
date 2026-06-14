@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 #include "draw.h"
 
 #define PX_PER_CELL 8           // CSS px -> character cells
@@ -154,6 +155,16 @@ static void css_append(const char *s, int len) {
   if (css_len + len + 1 < (int)sizeof css_buf) { memcpy(css_buf + css_len, s, len); css_len += len; css_buf[css_len] = 0; }
 }
 
+// collected <script> source (inline + external src), run after layout styling
+static char js_buf[1 << 16];
+static int js_len = 0;
+static void js_append(const char *s, int len) {
+  if (js_len + len + 2 < (int)sizeof js_buf) {
+    memcpy(js_buf + js_len, s, len); js_len += len;
+    js_buf[js_len++] = '\n'; js_buf[js_len] = 0;
+  }
+}
+
 static void lower(char *s) { for (; *s; s++) *s = tolower((unsigned char)*s); }
 
 // forward decl for <link> stylesheet loading
@@ -215,9 +226,13 @@ static void parse_html(const char *src) {
         css_append(p, (int)(e - p));
         p = (*e) ? e + 8 : e; continue;
       }
-      if (strcmp(name, "script") == 0) {            // skip JS (Stage 2)
+      if (strcmp(name, "script") == 0) {            // collect JS to run later
+        const char *src = attrval(el, "src");
+        if (src) { int L = 0; char *js = read_file(src, &L); if (js) { js_append(js, L); free(js); } }
         const char *e = strstr(p, "</script>");
-        p = e ? e + 9 : p + strlen(p); continue;
+        if (!e) e = p + strlen(p);
+        if (e > p) js_append(p, (int)(e - p));
+        p = (*e) ? e + 9 : e; continue;
       }
       if (strcmp(name, "link") == 0) {              // external stylesheet
         const char *rel = attrval(el, "rel"), *href = attrval(el, "href");
@@ -413,6 +428,215 @@ static void inherit(int n, int pcolor, int pbold, int palign) {
     inherit(c, N[n].color, N[n].bold, N[n].align);
 }
 
+static void style_node(int n);   // fwd
+static int find_tag(int n, const char *tag);
+
+static void full_restyle(void) {
+  for (int i = 0; i < nnodes; i++) style_node(i);
+  inherit(0, COL_BLACK, 0, 0);
+}
+
+// ---- DOM mutation helpers (shared by the JS bindings) ----------------------
+static void set_attr(int n, const char *name, const char *val) {
+  for (int i = 0; i < N[n].nattr; i++)
+    if (!strcmp(N[n].attr[i].name, name)) { strncpy(N[n].attr[i].val, val, 255); N[n].attr[i].val[255] = 0; return; }
+  if (N[n].nattr < MAXATTRS) {
+    strncpy(N[n].attr[N[n].nattr].name, name, 23); N[n].attr[N[n].nattr].name[23] = 0;
+    strncpy(N[n].attr[N[n].nattr].val, val, 255); N[n].attr[N[n].nattr].val[255] = 0;
+    N[n].nattr++;
+  }
+}
+static void set_text_content(int n, const char *s) {
+  N[n].child = -1;                       // drop existing children (nodes leak; fine)
+  int t = newnode(0); N[t].text = astr(s, (int)strlen(s)); add_child(n, t);
+}
+static void append_inline_style(int n, const char *prop, const char *val) {
+  const char *cur = attrval(n, "style");
+  char buf[256];
+  snprintf(buf, sizeof buf, "%s%s%s:%s;", cur ? cur : "", (cur && *cur) ? " " : "", prop, val);
+  set_attr(n, "style", buf);
+}
+static void gather_text(int n, char *buf, int *len, int cap) {
+  if (!N[n].is_elem) { const char *t = N[n].text; while (t && *t && *len < cap - 1) buf[(*len)++] = *t++; return; }
+  for (int c = N[n].child; c >= 0; c = N[c].sibling) gather_text(c, buf, len, cap);
+}
+
+// ---- JavaScript via QuickJS (optional: -DWEB_JS) ---------------------------
+#ifdef WEB_JS
+#include "quickjs.h"
+
+static JSClassID node_cid, style_cid;
+static JSClassDef node_class_def = { "DOMNode" };
+static JSClassDef style_class_def = { "DOMStyle" };
+
+static int opaque_idx(JSValueConst v, JSClassID cid) {
+  void *p = JS_GetOpaque(v, cid);
+  return p ? (int)(intptr_t)p - 1 : -1;
+}
+static JSValue make_node(JSContext *ctx, int idx) {
+  if (idx < 0) return JS_NULL;
+  JSValue o = JS_NewObjectClass(ctx, node_cid);
+  JS_SetOpaque(o, (void *)(intptr_t)(idx + 1));
+  return o;
+}
+
+static JSValue js_getAttribute(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_NULL;
+  const char *name = JS_ToCString(ctx, argv[0]); if (!name) return JS_NULL;
+  const char *v = attrval(n, name); JS_FreeCString(ctx, name);
+  return v ? JS_NewString(ctx, v) : JS_NULL;
+}
+static JSValue js_setAttribute(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_UNDEFINED;
+  const char *name = JS_ToCString(ctx, argv[0]); const char *val = JS_ToCString(ctx, argv[1]);
+  if (name && val) set_attr(n, name, val);
+  if (name) JS_FreeCString(ctx, name); if (val) JS_FreeCString(ctx, val);
+  return JS_UNDEFINED;
+}
+static JSValue js_appendChild(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid), c = opaque_idx(argv[0], node_cid);
+  if (n >= 0 && c >= 0) add_child(n, c);
+  return JS_DupValue(ctx, argv[0]);
+}
+static JSValue js_addEventListener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  return JS_UNDEFINED;   // events arrive in Stage 2b (reactor); accepted, no-op now
+}
+static JSValue js_get_textContent(JSContext *ctx, JSValueConst t) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_NewString(ctx, "");
+  char buf[4096]; int len = 0; gather_text(n, buf, &len, sizeof buf); buf[len] = 0;
+  return JS_NewString(ctx, buf);
+}
+static JSValue js_set_textContent(JSContext *ctx, JSValueConst t, JSValueConst v) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_UNDEFINED;
+  const char *s = JS_ToCString(ctx, v); if (s) { set_text_content(n, s); JS_FreeCString(ctx, s); }
+  return JS_UNDEFINED;
+}
+static JSValue js_get_style(JSContext *ctx, JSValueConst t) {
+  int n = opaque_idx(t, node_cid);
+  JSValue o = JS_NewObjectClass(ctx, style_cid);
+  JS_SetOpaque(o, (void *)(intptr_t)(n + 1));
+  return o;
+}
+// one setter shared by the style properties, dispatched on `magic`
+static JSValue js_style_set(JSContext *ctx, JSValueConst t, JSValueConst v, int magic) {
+  int n = opaque_idx(t, style_cid); if (n < 0) return JS_UNDEFINED;
+  const char *s = JS_ToCString(ctx, v);
+  if (s) {
+    const char *prop = magic == 0 ? "color" : magic == 1 ? "background-color" : "background";
+    append_inline_style(n, prop, s); JS_FreeCString(ctx, s);
+  }
+  return JS_UNDEFINED;
+}
+static JSValue js_style_get(JSContext *ctx, JSValueConst t, int magic) { return JS_NewString(ctx, ""); }
+
+static JSValue js_getElementById(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  const char *id = JS_ToCString(ctx, argv[0]); if (!id) return JS_NULL;
+  int found = -1;
+  for (int i = 0; i < nnodes; i++) {
+    const char *a = N[i].is_elem ? attrval(i, "id") : NULL;
+    if (a && !strcmp(a, id)) { found = i; break; }
+  }
+  JS_FreeCString(ctx, id);
+  return make_node(ctx, found);
+}
+static JSValue js_querySelector(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  const char *sel = JS_ToCString(ctx, argv[0]); if (!sel) return JS_NULL;
+  int found = -1;
+  for (int i = 0; i < nnodes; i++) if (N[i].is_elem && sel_match(sel, i)) { found = i; break; }
+  JS_FreeCString(ctx, sel);
+  return make_node(ctx, found);
+}
+static JSValue js_createElement(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  const char *tag = JS_ToCString(ctx, argv[0]); if (!tag) return JS_NULL;
+  int i = newnode(1); strncpy(N[i].tag, tag, 15);
+  for (char *p = N[i].tag; *p; p++) *p = tolower((unsigned char)*p);
+  JS_FreeCString(ctx, tag);
+  return make_node(ctx, i);
+}
+static JSValue js_get_body(JSContext *ctx, JSValueConst t) { return make_node(ctx, find_tag(0, "body")); }
+static JSValue js_console_log(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  for (int i = 0; i < argc; i++) {
+    const char *s = JS_ToCString(ctx, argv[i]);
+    fprintf(stderr, "%s%s", i ? " " : "", s ? s : "");
+    if (s) JS_FreeCString(ctx, s);
+  }
+  fprintf(stderr, "\n");
+  return JS_UNDEFINED;
+}
+
+// run all collected <script> against a DOM bound to our node tree, then re-style
+static void js_run(void) {
+  if (js_len == 0) return;
+  JSRuntime *rt = JS_NewRuntime();
+  JSContext *ctx = JS_NewContext(rt);
+
+  JS_NewClassID(rt, &node_cid);  JS_NewClass(rt, node_cid, &node_class_def);
+  JS_NewClassID(rt, &style_cid); JS_NewClass(rt, style_cid, &style_class_def);
+
+  // node prototype: methods + textContent/style accessors
+  JSValue np = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, np, "getAttribute", JS_NewCFunction(ctx, js_getAttribute, "getAttribute", 1));
+  JS_SetPropertyStr(ctx, np, "setAttribute", JS_NewCFunction(ctx, js_setAttribute, "setAttribute", 2));
+  JS_SetPropertyStr(ctx, np, "appendChild", JS_NewCFunction(ctx, js_appendChild, "appendChild", 1));
+  JS_SetPropertyStr(ctx, np, "addEventListener", JS_NewCFunction(ctx, js_addEventListener, "addEventListener", 2));
+  JSAtom a;
+  a = JS_NewAtom(ctx, "textContent");
+  JS_DefinePropertyGetSet(ctx, np, a,
+    JS_NewCFunction2(ctx, (JSCFunction *)js_get_textContent, "get textContent", 0, JS_CFUNC_getter, 0),
+    JS_NewCFunction2(ctx, (JSCFunction *)js_set_textContent, "set textContent", 1, JS_CFUNC_setter, 0),
+    JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
+  a = JS_NewAtom(ctx, "style");
+  JS_DefinePropertyGetSet(ctx, np, a,
+    JS_NewCFunction2(ctx, (JSCFunction *)js_get_style, "get style", 0, JS_CFUNC_getter, 0),
+    JS_UNDEFINED, JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
+  JS_SetClassProto(ctx, node_cid, np);
+
+  // style prototype: color / backgroundColor / background setters
+  JSValue sp = JS_NewObject(ctx);
+  static const char *snames[3] = { "color", "backgroundColor", "background" };
+  for (int m = 0; m < 3; m++) {
+    a = JS_NewAtom(ctx, snames[m]);
+    JS_DefinePropertyGetSet(ctx, sp, a,
+      JS_NewCFunction2(ctx, (JSCFunction *)js_style_get, "get", 0, JS_CFUNC_getter_magic, m),
+      JS_NewCFunction2(ctx, (JSCFunction *)js_style_set, "set", 1, JS_CFUNC_setter_magic, m),
+      JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
+  }
+  JS_SetClassProto(ctx, style_cid, sp);
+
+  JSValue glob = JS_GetGlobalObject(ctx);
+  JSValue doc = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, doc, "getElementById", JS_NewCFunction(ctx, js_getElementById, "getElementById", 1));
+  JS_SetPropertyStr(ctx, doc, "querySelector", JS_NewCFunction(ctx, js_querySelector, "querySelector", 1));
+  JS_SetPropertyStr(ctx, doc, "createElement", JS_NewCFunction(ctx, js_createElement, "createElement", 1));
+  a = JS_NewAtom(ctx, "body");
+  JS_DefinePropertyGetSet(ctx, doc, a,
+    JS_NewCFunction2(ctx, (JSCFunction *)js_get_body, "get body", 0, JS_CFUNC_getter, 0),
+    JS_UNDEFINED, JS_PROP_C_W_E); JS_FreeAtom(ctx, a);
+  JS_SetPropertyStr(ctx, glob, "document", doc);
+
+  JSValue con = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, con, "log", JS_NewCFunction(ctx, js_console_log, "log", 1));
+  JS_SetPropertyStr(ctx, glob, "console", con);
+  JS_FreeValue(ctx, glob);
+
+  JSValue r = JS_Eval(ctx, js_buf, js_len, "<script>", JS_EVAL_TYPE_GLOBAL);
+  if (JS_IsException(r)) {
+    JSValue e = JS_GetException(ctx);
+    const char *s = JS_ToCString(ctx, e);
+    fprintf(stderr, "JS error: %s\n", s ? s : "?");
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, e);
+  }
+  JS_FreeValue(ctx, r);
+  JS_FreeContext(ctx);
+  JS_FreeRuntime(rt);
+
+  full_restyle();   // reflect DOM mutations (new nodes, styles, text) in layout
+}
+#else
+static void js_run(void) {}
+#endif
+
 // ---- layout + render --------------------------------------------------------
 // We emit directly while laying out: a cursor walks down the page; block boxes
 // consume the full content width, inline content wraps into styled word runs.
@@ -579,6 +803,7 @@ int main(int argc, char **argv) {
   parse_css(css_buf);
   for (int i = 0; i < nnodes; i++) style_node(i);
   inherit(0, COL_BLACK, 0, 0);   // root: black text, not bold, left-aligned
+  js_run();                      // run <script> (mutates the DOM, then restyles)
 
   // page background: white. Emit a generous height; the host clips to the frame
   // it actually receives (we re-emit SIZE with the true height after layout).

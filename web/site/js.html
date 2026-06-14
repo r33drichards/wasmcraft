@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><style>
+  h1 { color: blue; text-align: center; }
+  #app { color: gray; }
+</style></head>
+<body>
+  <h1>JS demo</h1>
+  <div id="app">loading...</div>
+  <script>
+    var app = document.getElementById('app');
+    app.textContent = 'Hello from JavaScript! ' + [1,2,3].map(function(x){return x*x;}).join(', ');
+    app.style.color = 'lime';
+    var p = document.createElement('p');
+    p.textContent = 'This paragraph was created by createElement + appendChild.';
+    p.style.color = 'cyan';
+    p.setAttribute('style', 'color: cyan; text-align: right;');
+    document.body.appendChild(p);
+    console.log('script ran; squares computed');
+  </script>
+</body></html>

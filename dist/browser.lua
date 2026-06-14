@@ -62,7 +62,7 @@ end
 -- as the preopened directory (so the engine can fopen the page + linked files).
 -- Works off both the bundle and the src/ require path (both expose load/
 -- instantiate/wasi).
-local function run_wasi(engine, bytes, prog_args, writefn, root, opts)
+local function run_wasi(engine, bytes, prog_args, writefn, errfn, root, opts)
   -- under CC, yield to the event loop periodically so long runs don't trip the
   -- "too long without yielding" watchdog (the bundle installs this itself)
   if engine.set_yield and type(os) == "table" and os.queueEvent and os.pullEvent then
@@ -73,9 +73,12 @@ local function run_wasi(engine, bytes, prog_args, writefn, root, opts)
   -- mount the site dir: the bundle's hostfs is CC fs-backed (in-game); off CC we
   -- fall back to wasi's io-based hostfs. Passing fs explicitly avoids wasi.make
   -- building an io_hostfs that would fail on CC (which has no io.open).
+  -- stdout (writefn) carries the draw protocol; stderr (errfn) carries
+  -- console.log — they MUST be separate so console output can't corrupt the
+  -- frame the parser is building.
   local hostfs = (engine.hostfs and engine.hostfs(root or "."))
               or (wasi.io_hostfs and wasi.io_hostfs(root or "."))
-  local host = wasi.make({ write = writefn, writeerr = writefn, args = prog_args,
+  local host = wasi.make({ write = writefn, writeerr = errfn or function() end, args = prog_args,
                            fs = hostfs, root = root or "." })
   local inst = engine.instantiate(module, { wasi_snapshot_preview1 = host }, opts)
   local ok, err = pcall(function() inst:call("_start") end)
@@ -163,5 +166,12 @@ local function render(fr)
   end
 end
 
+-- console.log (engine stderr) is collected separately from the draw protocol;
+-- shown only in ASCII mode so it can't disturb a monitor/terminal frame.
+local console = {}
+local function errfn(s) console[#console + 1] = s end
+
 local sink = WR.line_sink(WR.make_parser(render))
-run_wasi(engine, bytes, { page, page, tostring(cols) }, sink, root, { mode = mode })
+run_wasi(engine, bytes, { page, page, tostring(cols) }, sink, errfn, root, { mode = mode })
+
+if kind == "ascii" and #console > 0 then io.write("\n[console] " .. table.concat(console)) end

@@ -17,6 +17,24 @@ fetch_sqlite() {
   cp vendor/sqlite-amalgamation-3530200/sqlite3.h csrc/sqlite3.h
 }
 
+# QuickJS (quickjs-ng) powers the web engine's <script>/JS/React support. Fetched
+# like SQLite (not vendored) into csrc/web/quickjs/.
+QJS_VER="0.10.1"
+QJS_URL="https://github.com/quickjs-ng/quickjs/archive/refs/tags/v${QJS_VER}.tar.gz"
+fetch_quickjs() {
+  if [ -f csrc/web/quickjs/quickjs.c ]; then return; fi
+  echo "== fetching QuickJS-ng v${QJS_VER} =="
+  curl -fsSL "$QJS_URL" -o vendor/quickjs.tar.gz
+  mkdir -p csrc/web/quickjs
+  tar -xzf vendor/quickjs.tar.gz -C vendor
+  for f in quickjs.c quickjs.h quickjs-atom.h quickjs-opcode.h libregexp.c libregexp.h \
+           libregexp-opcode.h libunicode.c libunicode.h libunicode-table.h cutils.c cutils.h \
+           xsum.c xsum.h list.h quickjs-c-atomics.h builtin-array-fromasync.h \
+           dirent_compat.h; do
+    cp "vendor/quickjs-${QJS_VER}/$f" "csrc/web/quickjs/$f" 2>/dev/null || true
+  done
+}
+
 build() {
   fetch_sqlite
   echo "== assembling .wat fixtures =="
@@ -26,8 +44,14 @@ build() {
   echo "== compiling C fixtures =="
   zig cc -target wasm32-wasi -Os -o wasm/hello.wasm   csrc/hello.c
   zig cc -target wasm32-wasi -Os -o wasm/compute.wasm csrc/compute.c
-  echo "== compiling web engine (HTML/CSS -> draw protocol) =="
-  zig cc -target wasm32-wasi -Os -Icsrc/web -o wasm/web.wasm csrc/web/web.c
+  echo "== compiling web engine (HTML/CSS/JS via QuickJS -> draw protocol) =="
+  fetch_quickjs
+  local QJS=csrc/web/quickjs
+  zig cc -target wasm32-wasi -O2 -DWEB_JS -DCONFIG_VERSION='"ng"' \
+    -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_MMAN \
+    -Icsrc/web -I"$QJS" -o wasm/web.wasm \
+    csrc/web/web.c "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" "$QJS/cutils.c" "$QJS/xsum.c" \
+    -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-mman
   local SQLITE_FLAGS="-DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
     -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_WAL -DSQLITE_TEMP_STORE=3"
   echo "== compiling SQLite demo command module (~15s) =="

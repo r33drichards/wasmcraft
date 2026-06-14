@@ -16,6 +16,9 @@ vendor/cobalt-src/
 vendor/Cobalt-0.7.3-sources.jar
 csrc/sqlite3.c
 csrc/sqlite3.h
+vendor/quickjs.tar.gz
+vendor/quickjs-*/
+csrc/web/quickjs/
 
 # mkdocs build output
 /site/
