@@ -1,0 +1,11 @@
+<!doctype html>
+<html><body>
+  <p>state: <strong id="app">clicks:0</strong></p>
+  <button id="btn">increment</button>
+  <script>
+    var c = 0, app = document.getElementById('app');
+    document.getElementById('btn').addEventListener('click', function () {
+      c++; app.textContent = 'clicks:' + c;
+    });
+  </script>
+</body></html>

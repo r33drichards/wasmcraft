@@ -16,6 +16,9 @@ vendor/cobalt-src/
 vendor/Cobalt-0.7.3-sources.jar
 csrc/sqlite3.c
 csrc/sqlite3.h
+vendor/quickjs.tar.gz
+vendor/quickjs-*/
+csrc/web/quickjs/
 
 # mkdocs build output
 /site/
@@ -25,3 +28,9 @@ csrc/sqlite3.h
 .wasmcraft_sqltest.db
 .planner_state
 .planner_result
+
+# wasmcraft web: cc-screenshot output
+/out/
+
+# react bundler toolchain (regenerable)
+/.web-build/

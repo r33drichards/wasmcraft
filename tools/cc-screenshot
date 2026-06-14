@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Render a web page with the wasmcraft browser on a REAL ComputerCraft computer
+# (CraftOS-PC, headless) and capture the screen — both plain text and a faithful
+# colour screenshot (standalone HTML) built from the live CC blit buffer.
+#
+#   Usage:  tools/cc-screenshot [page]            (default: web/site/index.html)
+#   Output: out/cc-render.txt  and  out/cc-render.html
+#
+# Requires a built CraftOS-PC fork + its ROM. Point at them via env vars (or the
+# defaults, which match the build below):
+#   CRAFTOS  = path to the craftos binary      (default: /tmp/craftos2/craftos)
+#   CCROM    = path to the craftos2-rom dir     (default: /tmp/craftos2-rom)
+#
+# Build CraftOS-PC once (Ubuntu, ~3 min):
+#   apt-get install -y libsdl2-dev libsdl2-mixer-dev libpng++-dev libwebp-dev \
+#                      libpoco-dev libncurses-dev libhpdf-dev
+#   git clone --depth 1 https://github.com/r33drichards/craftos2 /tmp/craftos2
+#   cd /tmp/craftos2 && git submodule update --init --recursive
+#   git clone --depth 1 https://github.com/MCJack123/craftos2-rom /tmp/craftos2-rom
+#   make -C craftos2-lua linux -j$(nproc)
+#   ./configure --without-png --without-webp --without-ncurses \
+#               --without-sdl_mixer --with-txt && make -j$(nproc)
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+PAGE="${1:-web/site/index.html}"
+CRAFTOS="${CRAFTOS:-/tmp/craftos2/craftos}"
+CCROM="${CCROM:-/tmp/craftos2-rom}"
+[ -x "$CRAFTOS" ] || { echo "craftos binary not found at $CRAFTOS (see header for build steps)"; exit 1; }
+
+[ -f dist/wasmcraft.lua ] || tools/amalgamate
+[ -f wasm/web.wasm ] || { echo "wasm/web.wasm missing — run tools/build-fixtures"; exit 1; }
+
+PROG="$(mktemp -d)"; OUTDIR="$ROOT/out"; DATA="$(mktemp -d)"
+mkdir -p "$OUTDIR" "$PROG/site"
+cp dist/browser.lua "$PROG/browser.lua"
+cp dist/webrender.lua "$PROG/webrender.lua"
+cp dist/wasmcraft.lua "$PROG/wasmcraft"
+cp wasm/web.wasm "$PROG/web.wasm"
+# copy the page's whole directory so linked .css/.js (e.g. a React app.js) come
+# along; render the named page file.
+PAGEDIR="$(cd "$(dirname "$PAGE")" && pwd)"; PAGEFILE="$(basename "$PAGE")"
+cp -r "$PAGEDIR"/. "$PROG/site/" 2>/dev/null || cp "$PAGE" "$PROG/site/$PAGEFILE"
+
+# MODE is a browser.lua execution flag; --jit is needed for JS/React-heavy pages.
+MODE="${MODE:-}"
+cat > "$PROG/harness.lua" <<LUA
+for _, f in ipairs(fs.list("/prog")) do
+  if f ~= "harness.lua" and not fs.exists("/" .. f) then pcall(fs.copy, "/prog/" .. f, "/" .. f) end
+end
+local w, h = term.getSize()
+local win = window.create(term.current(), 1, 1, w, h, true)
+local old = term.redirect(win)
+local ok, err = pcall(function() shell.run("/browser.lua"${MODE:+, "$MODE"}, "/site/$PAGEFILE") end)
+term.redirect(old)
+local fh = fs.open("/out/blit.tsv", "w")
+for y = 1, h do local t, f, b = win.getLine(y); fh.write((t or "").."\t"..(f or "").."\t"..(b or "").."\n") end
+fh.close()
+if not ok then local e = fs.open("/out/err.txt", "w"); e.write(tostring(err)); e.close() end
+sleep(0.1); os.shutdown()
+LUA
+
+rm -f "$OUTDIR/blit.tsv" "$OUTDIR/err.txt"
+# the binary is linked with a relative library path, so it must run from its own
+# directory; everything else is passed as an absolute path.
+CDIR="$(cd "$(dirname "$CRAFTOS")" && pwd)"
+export LD_LIBRARY_PATH="$CDIR/craftos2-lua/src:${LD_LIBRARY_PATH:-}"
+PROG="$(cd "$PROG" && pwd)"; OUTDIR="$(cd "$OUTDIR" && pwd)"; DATA="$(cd "$DATA" && pwd)"
+CCROM="$(cd "$CCROM" && pwd)"
+# JS/React pages take tens of seconds even under --jit; allow a generous budget.
+TIMEOUT="${TIMEOUT:-120}"
+( cd "$CDIR" && timeout "$TIMEOUT" "./$(basename "$CRAFTOS")" --headless --rom "$CCROM" -d "$DATA" \
+    --mount-ro /prog="$PROG" --mount-rw /out="$OUTDIR" --script "$PROG/harness.lua" >/dev/null 2>&1 ) &
+CPID=$!
+for _ in $(seq 1 "$TIMEOUT"); do [ -s "$OUTDIR/blit.tsv" ] && break; kill -0 $CPID 2>/dev/null || break; sleep 1; done
+kill $CPID 2>/dev/null || true; wait $CPID 2>/dev/null || true
+[ -f "$OUTDIR/err.txt" ] && { echo "browser error: $(cat "$OUTDIR/err.txt")"; }
+[ -s "$OUTDIR/blit.tsv" ] || { echo "no capture produced"; exit 1; }
+
+python3 - "$OUTDIR/blit.tsv" "$OUTDIR/cc-render.txt" "$OUTDIR/cc-render.html" <<'PY'
+import sys
+blit, txt, html = sys.argv[1], sys.argv[2], sys.argv[3]
+pal = {'0':'#F0F0F0','1':'#F2B233','2':'#E57FD8','3':'#99B2F2','4':'#DEDE6C',
+       '5':'#7FCC19','6':'#F2B2CC','7':'#4C4C4C','8':'#999999','9':'#4C99B2',
+       'a':'#B266E5','b':'#3366CC','c':'#7F664C','d':'#57A64E','e':'#CC4C4C','f':'#111111'}
+rows = [ln.rstrip('\n').split('\t') for ln in open(blit)]
+W = max((len(r[0]) for r in rows), default=51)
+esc = lambda c: {'&':'&amp;','<':'&lt;','>':'&gt;',' ':'&nbsp;'}.get(c, c)
+open(txt,'w').write('\n'.join((r[0] if r else '') for r in rows) + '\n')
+cells = []
+for r in rows:
+    t = r[0] if len(r) > 0 else ''
+    f = r[1] if len(r) > 1 else ''
+    b = r[2] if len(r) > 2 else ''
+    line = []
+    for i in range(W):
+        line.append('<span style="color:%s;background:%s">%s</span>' % (
+            pal.get(f[i] if i < len(f) else 'f', '#111'),
+            pal.get(b[i] if i < len(b) else '0', '#F0F0F0'),
+            esc(t[i] if i < len(t) else ' ')))
+    cells.append(''.join(line))
+open(html,'w').write(
+  '<!doctype html><meta charset=utf-8><title>wasmcraft browser on ComputerCraft</title>'
+  '<body style="background:#222;padding:20px">'
+  '<pre style="line-height:1;font-size:20px;display:inline-block;border:6px solid #555;'
+  'padding:8px;background:#F0F0F0">' + '\n'.join(cells) + '</pre></body>')
+print("wrote %s and %s" % (txt, html))
+PY
+rm -rf "$PROG" "$DATA"

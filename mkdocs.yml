@@ -42,6 +42,7 @@ nav:
   - How-to guides:
       - Install wasmcraft: how-to/install.md
       - Run a wasm module: how-to/run-a-wasm-module.md
+      - Render web pages (HTML/CSS/JS/React): how-to/render-web-pages.md
       - Embed the engine: how-to/embed-the-engine.md
       - Run the tests: how-to/run-the-tests.md
       - Rebuild fixtures and the bundle: how-to/rebuild-artifacts.md
