@@ -5385,20 +5385,16 @@
   var import_react = __toESM(require_react());
   var import_jsx_runtime = __toESM(require_jsx_runtime());
   function Counter() {
-    const [n] = (0, import_react.useState)(3);
+    const [n, setN] = (0, import_react.useState)(0);
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", { style: { color: "lime", textAlign: "center" }, children: "React on ComputerCraft" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", { style: { color: "lime", textAlign: "center" }, children: "React Counter" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-        "Count is ",
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { style: { color: "cyan" }, children: n }),
-        "."
+        "Count: ",
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { style: { color: "cyan" }, children: n })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: "function components" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: "hooks (useState)" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: "JSX" })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { color: "gray" }, children: "Rendered by React + a custom reconciler, inside QuickJS, inside wasm." })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => setN(n + 1), style: { background: "green", color: "white" }, children: "[ + increment ]" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => setN(n - 1), style: { background: "red", color: "white" }, children: "[ - decrement ]" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { color: "gray" }, children: "Tap a button on the monitor." })
     ] });
   }
 
@@ -5410,7 +5406,8 @@
         for (const s in props[k]) el.style[s] = props[k][s];
       } else if (k === "className") {
         el.setAttribute("class", String(props[k]));
-      } else if (k.slice(0, 2) === "on") {
+      } else if (k.slice(0, 2) === "on" && typeof props[k] === "function") {
+        el.addEventListener(k.slice(2).toLowerCase(), props[k]);
       } else if (props[k] != null) {
         el.setAttribute(k, String(props[k]));
       }
@@ -5486,6 +5483,8 @@
   );
   reconciler.flushSync(() => {
     reconciler.updateContainer(import_react2.default.createElement(Counter), container, null, null);
+  });
+  globalThis.__wasmcraft_flush = () => reconciler.flushSync(() => {
   });
 })();
 /*! Bundled license information:

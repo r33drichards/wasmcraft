@@ -58,33 +58,34 @@ local function load_engine()
   return assert(loadfile(path))()
 end
 
--- run a WASI command module, routing its stdout to `writefn` and mounting `root`
--- as the preopened directory (so the engine can fopen the page + linked files).
--- Works off both the bundle and the src/ require path (both expose load/
--- instantiate/wasi).
-local function run_wasi(engine, bytes, prog_args, writefn, errfn, root, opts)
-  -- under CC, yield to the event loop periodically so long runs don't trip the
-  -- "too long without yielding" watchdog (the bundle installs this itself)
+-- Instantiate the web engine as a REACTOR (mount `root`, route stdout=draw
+-- protocol to `writefn`, stderr=console.log to `errfn`), call _initialize, and
+-- return the live instance so the caller can drive web_init / web_event across
+-- many frames (interactivity). stdout and stderr MUST be separate so console
+-- output can't corrupt the frame the parser is building.
+local function start_engine(engine, bytes, writefn, errfn, root, opts)
   if engine.set_yield and type(os) == "table" and os.queueEvent and os.pullEvent then
     engine.set_yield(function() os.queueEvent("browser_yield"); os.pullEvent("browser_yield") end, 200000)
   end
   local wasi = engine.wasi
   local module = engine.load(bytes)
-  -- mount the site dir: the bundle's hostfs is CC fs-backed (in-game); off CC we
-  -- fall back to wasi's io-based hostfs. Passing fs explicitly avoids wasi.make
-  -- building an io_hostfs that would fail on CC (which has no io.open).
-  -- stdout (writefn) carries the draw protocol; stderr (errfn) carries
-  -- console.log — they MUST be separate so console output can't corrupt the
-  -- frame the parser is building.
+  -- the bundle's hostfs is CC fs-backed (in-game); off CC fall back to wasi's
+  -- io-based hostfs. Passing fs explicitly avoids wasi.make building an io_hostfs
+  -- that would fail on CC (which has no io.open).
   local hostfs = (engine.hostfs and engine.hostfs(root or "."))
               or (wasi.io_hostfs and wasi.io_hostfs(root or "."))
-  local host = wasi.make({ write = writefn, writeerr = errfn or function() end, args = prog_args,
+  local host = wasi.make({ write = writefn, writeerr = errfn or function() end, args = { "web.wasm" },
                            fs = hostfs, root = root or "." })
   local inst = engine.instantiate(module, { wasi_snapshot_preview1 = host }, opts)
-  local ok, err = pcall(function() inst:call("_start") end)
-  if ok then return 0 end
-  if type(err) == "table" and err[wasi.EXIT] then return err.code or 0 end
-  error(err)
+  inst:call("_initialize")
+  return inst
+end
+
+-- marshal a Lua string into the module's memory as a NUL-terminated C string
+local function wstr(inst, s)
+  local p = inst:call("web_malloc", #s + 1)
+  inst.memory:storestr(p, s); inst.memory:set8(p + #s, 0)
+  return p
 end
 
 local function read_bytes(path)
@@ -172,6 +173,25 @@ local console = {}
 local function errfn(s) console[#console + 1] = s end
 
 local sink = WR.line_sink(WR.make_parser(render))
-run_wasi(engine, bytes, { page, page, tostring(cols) }, sink, errfn, root, { mode = mode })
+local inst = start_engine(engine, bytes, sink, errfn, root, { mode = mode })
 
-if kind == "ascii" and #console > 0 then io.write("\n[console] " .. table.concat(console)) end
+-- first frame
+local pp = wstr(inst, page); inst:call("web_init", pp, cols); inst:call("web_free", pp)
+
+-- interactive loop (CC only): route monitor/terminal taps into the engine as
+-- click events; each event re-renders and repaints. Quit with Q or Ctrl+T.
+if (kind == "monitor" or kind == "term") and type(os) == "table" and os.pullEvent then
+  if kind == "monitor" then print("browser: tap the monitor to interact; press Q (or Ctrl+T) to quit") end
+  while true do
+    local ev = { os.pullEvent() }
+    local e = ev[1]
+    if e == "monitor_touch" or e == "mouse_click" then
+      local x, y = ev[3], ev[4]                       -- 1-based cell; layout is 0-based
+      local tp = wstr(inst, "click"); inst:call("web_event", tp, x - 1, y - 1); inst:call("web_free", tp)
+    elseif (e == "char" and ev[2] == "q") or e == "terminate" then
+      break
+    end
+  end
+elseif kind == "ascii" and #console > 0 then
+  io.write("\n[console] " .. table.concat(console))
+end

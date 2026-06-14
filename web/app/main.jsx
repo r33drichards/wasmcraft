@@ -15,8 +15,10 @@ function applyProps(el, props) {
       for (const s in props[k]) el.style[s] = props[k][s];
     } else if (k === "className") {
       el.setAttribute("class", String(props[k]));
-    } else if (k.slice(0, 2) === "on") {
-      // event props are accepted now; wired to CC events in a later stage
+    } else if (k.slice(0, 2) === "on" && typeof props[k] === "function") {
+      // onClick -> addEventListener("click", ...); the engine keeps one handler
+      // per (node, type) and replaces it, so re-renders attach a fresh closure
+      el.addEventListener(k.slice(2).toLowerCase(), props[k]);
     } else if (props[k] != null) {
       el.setAttribute(k, String(props[k]));
     }
@@ -84,3 +86,7 @@ const container = reconciler.createContainer(
 reconciler.flushSync(() => {
   reconciler.updateContainer(React.createElement(Counter), container, null, null);
 });
+
+// the engine calls this after delivering an event, so a setState inside a click
+// handler commits synchronously before the page is laid out again.
+globalThis.__wasmcraft_flush = () => reconciler.flushSync(() => {});

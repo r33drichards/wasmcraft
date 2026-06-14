@@ -12,16 +12,19 @@ T.start("web_js")
 local f = assert(io.open("wasm/web.wasm", "rb"), "wasm/web.wasm missing (run tools/build-fixtures)")
 local bytes = f:read("*a"); f:close()
 
--- the JS demo lives at web/site/js.html; mount its dir, render that page
+-- the JS demo lives at web/site/js.html; mount its dir, render that page via the
+-- reactor interface (_initialize + web_init).
 local out, err = {}, {}
 local host = wasi.make({
   write = function(s) out[#out + 1] = s end,
   writeerr = function(s) err[#err + 1] = s end,
-  args = { "web.wasm", "js.html", "51" },
+  args = { "web.wasm" },
   root = "web/site",
 })
 local inst = wasm.instantiate(wasm.load(bytes), { wasi_snapshot_preview1 = host }, { mode = "interp" })
-pcall(function() inst:call("_start") end)
+inst:call("_initialize")
+local function wstr(s) local p = inst:call("web_malloc", #s + 1); inst.memory:storestr(p, s); inst.memory:set8(p + #s, 0); return p end
+local pp = wstr("js.html"); inst:call("web_init", pp, 51); inst:call("web_free", pp)
 local proto = table.concat(out)
 local console = table.concat(err)
 

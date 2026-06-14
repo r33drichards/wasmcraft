@@ -20,12 +20,15 @@
 #include <stdint.h>
 #include "draw.h"
 
+#define EXPORT(n) __attribute__((export_name(n)))
+
 #define PX_PER_CELL 8           // CSS px -> character cells
 #define MAXNODES   4096
 #define MAXRULES   512
 #define MAXDECLS   8
 #define MAXATTRS   8
 #define MAXSEL     8
+#define MAXLISTENERS 256
 
 // ---- colours ----------------------------------------------------------------
 // palette index -> approximate RGB (CC default palette), for nearest-match of
@@ -489,6 +492,22 @@ static JSClassID node_cid, style_cid;
 static JSClassDef node_class_def = { "DOMNode" };
 static JSClassDef style_class_def = { "DOMStyle" };
 
+// the JS runtime/context persists across frames so DOM state (React hooks, etc.)
+// survives between events; set up once per web_init().
+static JSRuntime *G_rt;
+static JSContext *G_ctx;
+
+// event listeners registered via addEventListener: one handler per (node,type),
+// replaced on re-add (React re-renders re-attach a fresh onClick closure).
+typedef struct { int node; char type[16]; JSValue fn; } Listener;
+static Listener LISTENERS[MAXLISTENERS];
+static int nlisteners;
+static int find_listener(int node, const char *type) {
+  for (int i = 0; i < nlisteners; i++)
+    if (LISTENERS[i].node == node && !strcmp(LISTENERS[i].type, type)) return i;
+  return -1;
+}
+
 static int opaque_idx(JSValueConst v, JSClassID cid) {
   void *p = JS_GetOpaque(v, cid);
   return p ? (int)(intptr_t)p - 1 : -1;
@@ -545,7 +564,33 @@ static JSValue js_createTextNode(JSContext *ctx, JSValueConst t, int argc, JSVal
   return make_node(ctx, i);
 }
 static JSValue js_addEventListener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
-  return JS_UNDEFINED;   // events arrive in Stage 2b (reactor); accepted, no-op now
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_UNDEFINED;
+  const char *type = JS_ToCString(ctx, argv[0]); if (!type) return JS_UNDEFINED;
+  if (argc > 1 && JS_IsFunction(ctx, argv[1])) {
+    int idx = find_listener(n, type);
+    if (idx < 0 && nlisteners < MAXLISTENERS) {
+      idx = nlisteners++; LISTENERS[idx].node = n;
+      strncpy(LISTENERS[idx].type, type, 15); LISTENERS[idx].type[15] = 0;
+      LISTENERS[idx].fn = JS_UNDEFINED;
+    }
+    if (idx >= 0) {
+      if (!JS_IsUndefined(LISTENERS[idx].fn)) JS_FreeValue(ctx, LISTENERS[idx].fn);
+      LISTENERS[idx].fn = JS_DupValue(ctx, argv[1]);
+    }
+  }
+  JS_FreeCString(ctx, type);
+  return JS_UNDEFINED;
+}
+static JSValue js_removeEventListener(JSContext *ctx, JSValueConst t, int argc, JSValueConst *argv) {
+  int n = opaque_idx(t, node_cid); if (n < 0) return JS_UNDEFINED;
+  const char *type = JS_ToCString(ctx, argv[0]); if (!type) return JS_UNDEFINED;
+  int idx = find_listener(n, type);
+  if (idx >= 0) {
+    if (!JS_IsUndefined(LISTENERS[idx].fn)) JS_FreeValue(ctx, LISTENERS[idx].fn);
+    LISTENERS[idx] = LISTENERS[--nlisteners];
+  }
+  JS_FreeCString(ctx, type);
+  return JS_UNDEFINED;
 }
 static JSValue js_get_textContent(JSContext *ctx, JSValueConst t) {
   int n = opaque_idx(t, node_cid); if (n < 0) return JS_NewString(ctx, "");
@@ -610,16 +655,26 @@ static JSValue js_console_log(JSContext *ctx, JSValueConst t, int argc, JSValueC
   return JS_UNDEFINED;
 }
 
-// run all collected <script> against a DOM bound to our node tree, then re-style
-static void js_run(void) {
-  if (js_len == 0) return;
-  JSRuntime *rt = JS_NewRuntime();
-  JSContext *ctx = JS_NewContext(rt);
+// drain the job queue (Promises / microtasks / React's scheduler callbacks)
+static void drain_jobs(void) {
+  JSContext *c1;
+  for (;;) {
+    int rc = JS_ExecutePendingJob(G_rt, &c1);
+    if (rc <= 0) {
+      if (rc < 0) { JSValue e = JS_GetException(c1); const char *s = JS_ToCString(c1, e);
+        fprintf(stderr, "JS job error: %s\n", s ? s : "?"); if (s) JS_FreeCString(c1, s); JS_FreeValue(c1, e); }
+      break;
+    }
+  }
+}
 
-  JS_NewClassID(rt, &node_cid);  JS_NewClass(rt, node_cid, &node_class_def);
-  JS_NewClassID(rt, &style_cid); JS_NewClass(rt, style_cid, &style_class_def);
+// create the persistent runtime/context and register the DOM bindings (once).
+static void js_setup(void) {
+  JSContext *ctx = G_ctx;
+  JS_NewClassID(G_rt, &node_cid);  JS_NewClass(G_rt, node_cid, &node_class_def);
+  JS_NewClassID(G_rt, &style_cid); JS_NewClass(G_rt, style_cid, &style_class_def);
 
-  // node prototype: methods + textContent/style accessors
+  // node prototype: methods + textContent/nodeValue/style accessors
   JSValue np = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, np, "getAttribute", JS_NewCFunction(ctx, js_getAttribute, "getAttribute", 1));
   JS_SetPropertyStr(ctx, np, "setAttribute", JS_NewCFunction(ctx, js_setAttribute, "setAttribute", 2));
@@ -627,6 +682,7 @@ static void js_run(void) {
   JS_SetPropertyStr(ctx, np, "insertBefore", JS_NewCFunction(ctx, js_insertBefore, "insertBefore", 2));
   JS_SetPropertyStr(ctx, np, "removeChild", JS_NewCFunction(ctx, js_removeChild, "removeChild", 1));
   JS_SetPropertyStr(ctx, np, "addEventListener", JS_NewCFunction(ctx, js_addEventListener, "addEventListener", 2));
+  JS_SetPropertyStr(ctx, np, "removeEventListener", JS_NewCFunction(ctx, js_removeEventListener, "removeEventListener", 2));
   JSAtom a;
   a = JS_NewAtom(ctx, "textContent");
   JS_DefinePropertyGetSet(ctx, np, a,
@@ -674,8 +730,7 @@ static void js_run(void) {
   JS_FreeValue(ctx, glob);
 
   // minimal timer shims: there is no macrotask event loop, so map timers onto
-  // the microtask queue (drained below). Enough for React's scheduler and for
-  // scripts that defer work; one-shot rendering doesn't need real delays.
+  // the microtask queue (drained after each frame). Enough for React's scheduler.
   static const char *PRELUDE =
     "globalThis.setTimeout=function(f){if(typeof f==='function')Promise.resolve().then(f);return 0;};"
     "globalThis.clearTimeout=function(){};"
@@ -684,32 +739,67 @@ static void js_run(void) {
     "globalThis.queueMicrotask=globalThis.queueMicrotask||function(f){Promise.resolve().then(f);};";
   JSValue pr = JS_Eval(ctx, PRELUDE, strlen(PRELUDE), "<prelude>", JS_EVAL_TYPE_GLOBAL);
   JS_FreeValue(ctx, pr);
+}
 
-  JSValue r = JS_Eval(ctx, js_buf, js_len, "<script>", JS_EVAL_TYPE_GLOBAL);
+// run the collected <script> against the DOM (keeps the context alive), restyle
+static void js_run(void) {
+  if (js_len == 0) return;
+  G_rt = JS_NewRuntime();
+  G_ctx = JS_NewContext(G_rt);
+  js_setup();
+  JSValue r = JS_Eval(G_ctx, js_buf, js_len, "<script>", JS_EVAL_TYPE_GLOBAL);
   if (JS_IsException(r)) {
-    JSValue e = JS_GetException(ctx);
-    const char *s = JS_ToCString(ctx, e);
+    JSValue e = JS_GetException(G_ctx);
+    const char *s = JS_ToCString(G_ctx, e);
     fprintf(stderr, "JS error: %s\n", s ? s : "?");
-    if (s) JS_FreeCString(ctx, s);
-    JS_FreeValue(ctx, e);
+    if (s) JS_FreeCString(G_ctx, s);
+    JS_FreeValue(G_ctx, e);
   }
-  JS_FreeValue(ctx, r);
+  JS_FreeValue(G_ctx, r);
+  drain_jobs();
+  full_restyle();
+}
 
-  // drain the job queue (Promises / microtasks / React's scheduler callbacks)
-  JSContext *ctx1;
-  for (;;) {
-    int rc = JS_ExecutePendingJob(rt, &ctx1);
-    if (rc <= 0) { if (rc < 0) { JSValue e = JS_GetException(ctx1); const char *s = JS_ToCString(ctx1, e);
-        fprintf(stderr, "JS job error: %s\n", s ? s : "?"); if (s) JS_FreeCString(ctx1, s); JS_FreeValue(ctx1, e); } break; }
+static void js_teardown(void) {
+  if (G_ctx) for (int i = 0; i < nlisteners; i++)
+    if (!JS_IsUndefined(LISTENERS[i].fn)) JS_FreeValue(G_ctx, LISTENERS[i].fn);
+  nlisteners = 0;
+  if (G_ctx) { JS_FreeContext(G_ctx); G_ctx = NULL; }
+  if (G_rt) { JS_FreeRuntime(G_rt); G_rt = NULL; }
+}
+
+// dispatch a DOM event: walk from the hit node up to the root, firing the first
+// matching listener (bubbling to the nearest handler).
+static void dispatch(int node, const char *type) {
+  if (!G_ctx) return;
+  for (int n = node; n >= 0; n = N[n].parent) {
+    int idx = find_listener(n, type);
+    if (idx >= 0 && !JS_IsUndefined(LISTENERS[idx].fn)) {
+      JSValue r = JS_Call(G_ctx, LISTENERS[idx].fn, JS_UNDEFINED, 0, NULL);
+      if (JS_IsException(r)) { JSValue e = JS_GetException(G_ctx); const char *s = JS_ToCString(G_ctx, e);
+        fprintf(stderr, "event handler error: %s\n", s ? s : "?"); if (s) JS_FreeCString(G_ctx, s); JS_FreeValue(G_ctx, e); }
+      JS_FreeValue(G_ctx, r);
+      return;
+    }
   }
+}
 
-  JS_FreeContext(ctx);
-  JS_FreeRuntime(rt);
-
-  full_restyle();   // reflect DOM mutations (new nodes, styles, text) in layout
+// after an event, let React commit synchronously (the bundle exposes
+// __wasmcraft_flush -> reconciler.flushSync), then drain microtasks.
+static void flush_react(void) {
+  if (!G_ctx) return;
+  JSValue glob = JS_GetGlobalObject(G_ctx);
+  JSValue f = JS_GetPropertyStr(G_ctx, glob, "__wasmcraft_flush");
+  if (JS_IsFunction(G_ctx, f)) { JSValue r = JS_Call(G_ctx, f, JS_UNDEFINED, 0, NULL); JS_FreeValue(G_ctx, r); }
+  JS_FreeValue(G_ctx, f);
+  JS_FreeValue(G_ctx, glob);
+  drain_jobs();
 }
 #else
 static void js_run(void) {}
+static void js_teardown(void) {}
+static void dispatch(int node, const char *type) { (void)node; (void)type; }
+static void flush_react(void) {}
 #endif
 
 // ---- layout + render --------------------------------------------------------
@@ -813,6 +903,7 @@ static int layout_block(int n, int x0, int width, int y) {
   if (N[n].width >= 0 && N[n].width < cw) cw = N[n].width;
   if (cw < 1) cw = 1;
   y += N[n].mt;
+  int ys = y;                    // content top, for the element's hit rect
   int is_li = N[n].is_elem && !strcmp(N[n].tag, "li");
   if (has_block_child(n)) {
     // accumulate consecutive inline children, flushing before each block child
@@ -834,6 +925,7 @@ static int layout_block(int n, int x0, int width, int y) {
     collect_words(n);
     if (nW > 0 || N[n].bg >= 0) y = render_words(0, nW, cx, cw, y, N[n].bg, N[n].align);
   }
+  if (N[n].is_elem) { N[n].x = cx; N[n].y = ys; N[n].w = cw; N[n].h = (y > ys) ? y - ys : 1; }
   y += N[n].mb;
   return y;
 }
@@ -860,46 +952,77 @@ static int find_tag(int n, const char *tag) {
   return -1;
 }
 
-int main(int argc, char **argv) {
-  const char *page = argc > 1 ? argv[1] : "index.html";
-  VW = argc > 2 ? atoi(argv[2]) : 51;
-  if (VW < 4) VW = 51;
+// lay out the current DOM and emit one frame of the draw protocol. A dry pass
+// measures the height (so SIZE is exact) and records each element's hit rect.
+static void emit_frame(void) {
+  int body = find_tag(0, "body");
+  if (body < 0) body = 0;
+  draw_suppress = 1;
+  int h = layout_block(body, 0, VW, 0);
+  draw_suppress = 0;
+  if (h < 1) h = 1;
+  draw_size(VW, h);
+  draw_clear(COL_WHITE);
+  layout_block(body, 0, VW, 0);   // records N[].x/y/w/h for hit-testing
+  draw_frame_end();
+  fflush(stdout);                 // push the frame to the host before we block
+}
 
+// deepest (smallest-area) element rect containing the cell (x,y)
+static int hit_test(int x, int y) {
+  int best = -1, bestarea = 1 << 30;
+  for (int i = 0; i < nnodes; i++) {
+    if (!N[i].is_elem || N[i].w <= 0 || N[i].h <= 0) continue;
+    if (x >= N[i].x && x < N[i].x + N[i].w && y >= N[i].y && y < N[i].y + N[i].h) {
+      int area = N[i].w * N[i].h;
+      if (area <= bestarea) { bestarea = area; best = i; }
+    }
+  }
+  return best;
+}
+
+static void reset_all(void) {
+  js_teardown();
+  nnodes = 0; css_len = 0; css_buf[0] = 0; js_len = 0; if (js_buf) js_buf[0] = 0; arena_off = 0;
+}
+
+EXPORT("web_malloc") void *web_malloc(int n) { return malloc(n); }
+EXPORT("web_free") void web_free(void *p) { free(p); }
+
+// (re)load a page and render the first frame. width = viewport columns.
+EXPORT("web_init") void web_init(const char *page, int width) {
+  reset_all();
+  VW = width >= 4 ? width : 51;
   int L = 0; char *html = read_file(page, &L);
   if (!html) {
     draw_size(VW, 1); draw_clear(COL_WHITE);
-    char msg[128]; snprintf(msg, sizeof msg, "browser: cannot open %s", page);
+    char msg[160]; snprintf(msg, sizeof msg, "browser: cannot open %s", page);
     draw_text(0, 0, COL_RED, COL_WHITE, msg);
-    draw_frame_end();
-    return 1;
+    draw_frame_end(); fflush(stdout);
+    return;
   }
-
   parse_html(html);
   parse_css(css_buf);
   for (int i = 0; i < nnodes; i++) style_node(i);
   inherit(0, COL_BLACK, 0, 0);   // root: black text, not bold, left-aligned
   js_run();                      // run <script> (mutates the DOM, then restyles)
-
-  // page background: white. Emit a generous height; the host clips to the frame
-  // it actually receives (we re-emit SIZE with the true height after layout).
-  // First lay out to a scratch to learn the height, then emit for real. Simpler:
-  // emit ops, tracking max row, then prepend SIZE. We buffer by emitting to a
-  // temp via two passes is overkill — instead lay out once, capture height.
-  int body = find_tag(0, "body");
-  if (body < 0) body = 0;
-
-  // measure height with a dry layout pass (draw_* suppressed), so SIZE carries
-  // the true page height; then lay out for real.
-  draw_suppress = 1;
-  int h = layout_block(body, 0, VW, 0);
-  draw_suppress = 0;
-  if (h < 1) h = 1;
-
-  draw_size(VW, h);
-  draw_clear(COL_WHITE);
-  layout_block(body, 0, VW, 0);
-  draw_frame_end();
-
   free(html);
+  emit_frame();
+}
+
+// deliver an event at cell (x,y): dispatch to the DOM, let React re-render, and
+// emit the updated frame. `type` is e.g. "click".
+EXPORT("web_event") void web_event(const char *type, int x, int y) {
+  int node = hit_test(x, y);
+  if (node >= 0) dispatch(node, type);
+  flush_react();
+  full_restyle();
+  emit_frame();
+}
+
+// kept so a command-model build still works (run.lua); the reactor build uses
+// _initialize + web_init/web_event instead.
+int main(int argc, char **argv) {
+  web_init(argc > 1 ? argv[1] : "index.html", argc > 2 ? atoi(argv[2]) : 51);
   return 0;
 }

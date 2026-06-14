@@ -47,7 +47,9 @@ build() {
   echo "== compiling web engine (HTML/CSS/JS via QuickJS -> draw protocol) =="
   fetch_quickjs
   local QJS=csrc/web/quickjs
-  zig cc -target wasm32-wasi -O2 -DWEB_JS -DCONFIG_VERSION='"ng"' \
+  # reactor model: the host calls _initialize then web_init/web_event repeatedly
+  # (interactivity), keeping the JS context alive between frames.
+  zig cc -target wasm32-wasi -mexec-model=reactor -O2 -DWEB_JS -DCONFIG_VERSION='"ng"' \
     -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_MMAN \
     -Icsrc/web -I"$QJS" -o wasm/web.wasm \
     csrc/web/web.c "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" "$QJS/cutils.c" "$QJS/xsum.c" \

@@ -12,15 +12,18 @@ T.start("web")
 local f = assert(io.open("wasm/web.wasm", "rb"), "wasm/web.wasm missing (run tools/build-fixtures)")
 local bytes = f:read("*a"); f:close()
 
--- capture the engine's stdout (the draw protocol)
+-- capture the engine's stdout (the draw protocol). web.wasm is a reactor:
+-- _initialize, then web_init(page, width) renders the first frame.
 local out = {}
 local host = wasi.make({
   write = function(s) out[#out + 1] = s end,
-  args = { "web.wasm", "index.html", "51" },
+  args = { "web.wasm" },
   root = "web/site",
 })
 local inst = wasm.instantiate(wasm.load(bytes), { wasi_snapshot_preview1 = host }, { mode = "interp" })
-pcall(function() inst:call("_start") end)
+inst:call("_initialize")
+local function wstr(s) local p = inst:call("web_malloc", #s + 1); inst.memory:storestr(p, s); inst.memory:set8(p + #s, 0); return p end
+local pp = wstr("index.html"); inst:call("web_init", pp, 51); inst:call("web_free", pp)
 local proto = table.concat(out)
 
 -- a small helper: is `needle` present as a whole protocol line?
