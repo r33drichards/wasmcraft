@@ -1026,6 +1026,41 @@ EXPORT("web_event") void web_event(const char *type, int x, int y) {
   emit_frame();
 }
 
+// deliver a host message: stash JSON in globalThis.__hostmsg, call the JS hook
+// globalThis.__wasmcraft_message (React installs it via main.jsx; plain pages
+// may install it directly), then re-style + re-emit — the web_event tail. This
+// is the host->JS data channel: event handlers get 0 args and 15-char types, so
+// rich data (identity, ids, status) rides here instead. See docs/plans/
+// 2026-06-14-web-message-host-channel-design.md.
+static char G_hostmsg[2048];
+EXPORT("web_message") void web_message(const char *json) {
+  size_t n = json ? strlen(json) : 0;
+  if (n >= sizeof G_hostmsg) n = sizeof G_hostmsg - 1;
+  memcpy(G_hostmsg, json ? json : "", n);
+  G_hostmsg[n] = 0;
+#ifdef WEB_JS
+  if (G_ctx) {
+    JSValue glob = JS_GetGlobalObject(G_ctx);
+    JS_SetPropertyStr(G_ctx, glob, "__hostmsg", JS_NewString(G_ctx, G_hostmsg));
+    JSValue f = JS_GetPropertyStr(G_ctx, glob, "__wasmcraft_message");
+    if (JS_IsFunction(G_ctx, f)) {
+      JSValue r = JS_Call(G_ctx, f, JS_UNDEFINED, 0, NULL);
+      if (JS_IsException(r)) {
+        JSValue e = JS_GetException(G_ctx); const char *s = JS_ToCString(G_ctx, e);
+        fprintf(stderr, "web_message handler error: %s\n", s ? s : "?");
+        if (s) JS_FreeCString(G_ctx, s); JS_FreeValue(G_ctx, e);
+      }
+      JS_FreeValue(G_ctx, r);
+    }
+    JS_FreeValue(G_ctx, f);
+    JS_FreeValue(G_ctx, glob);
+    drain_jobs();
+  }
+#endif
+  full_restyle();
+  emit_frame();
+}
+
 // kept so a command-model build still works (run.lua); the reactor build uses
 // _initialize + web_init/web_event instead.
 int main(int argc, char **argv) {

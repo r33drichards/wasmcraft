@@ -72,5 +72,5 @@ build() {
 if command -v wat2wasm >/dev/null && command -v zig >/dev/null; then
   build
 else
-  exec nix shell nixpkgs#wabt nixpkgs#zig --command bash -c "$(declare -f build); ZIG_GLOBAL_CACHE_DIR='$ROOT/.zig-cache' ZIG_LOCAL_CACHE_DIR='$ROOT/.zig-cache' build"
+  exec nix shell nixpkgs#wabt nixpkgs#zig --command bash -c "$(declare -p QJS_VER QJS_URL SQLITE_URL; declare -f build fetch_quickjs fetch_sqlite); ZIG_GLOBAL_CACHE_DIR='$ROOT/.zig-cache' ZIG_LOCAL_CACHE_DIR='$ROOT/.zig-cache' build"
 fi
