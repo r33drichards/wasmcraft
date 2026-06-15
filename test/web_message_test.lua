@@ -1,7 +1,8 @@
 -- Test the host->JS data channel: render a plain-JS page, call web_message with
 -- JSON, and assert the page read globalThis.__hostmsg and re-rendered. Exercises
--- the web_message export + __wasmcraft_message hook + re-layout. Requires the
--- WEB_JS build; skips otherwise.
+-- the web_message export + __wasmcraft_message hook + re-layout. The page's
+-- inline script sets a JS-driven "ready" sentinel on load; a non-WEB_JS engine
+-- never runs it (the DOM keeps its static "nojs" text), so the test skips.
 package.path = "src/?.lua;test/?.lua;" .. package.path
 local T = require("harness")
 local wasm = require("wasm")
@@ -26,12 +27,12 @@ local function frame() local s = table.concat(out); out = {}; return s end
 local pp = wstr("hostmsg.html"); inst:call("web_init", pp, 51); inst:call("web_free", pp)
 local f0 = frame()
 
--- skip on a non-WEB_JS engine (the script never runs, so "none" stays but the
--- export may also be absent); detect JS by whether the initial DOM rendered.
-if f0:find("none", 1, true) == nil then
-  print("web_message: unexpected initial frame — aborting"); T.done(); return
+-- skip on a non-WEB_JS engine: the inline script never runs, so the JS-driven
+-- "ready" sentinel is absent (the DOM keeps its static "nojs" text).
+if f0:find("ready", 1, true) == nil then
+  print("web_message: engine has no JS (non-WEB_JS build) — skipping"); T.done(); return
 end
-T.ok(f0:find("none", 1, true) ~= nil, "initial state rendered (none)")
+T.ok(f0:find("ready", 1, true) ~= nil, "initial state rendered (ready)")
 
 local function message(json)
   local p = wstr(json); inst:call("web_message", p); inst:call("web_free", p)
