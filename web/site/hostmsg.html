@@ -1,0 +1,12 @@
+<body>
+  <div id="out">none</div>
+  <script>
+    // The host calls globalThis.__wasmcraft_message after setting __hostmsg.
+    // (React pages get this hook from main.jsx; a plain page installs it itself.)
+    globalThis.__wasmcraft_message = function () {
+      var m;
+      try { m = JSON.parse(globalThis.__hostmsg || "{}"); } catch (e) { m = {}; }
+      document.getElementById("out").textContent = "msg:" + (m.text || "?");
+    };
+  </script>
+</body>
