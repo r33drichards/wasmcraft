@@ -90,3 +90,14 @@ reconciler.flushSync(() => {
 // the engine calls this after delivering an event, so a setState inside a click
 // handler commits synchronously before the page is laid out again.
 globalThis.__wasmcraft_flush = () => reconciler.flushSync(() => {});
+
+// Host->React data channel (paired with the engine's web_message export). An app
+// registers a handler; web_message sets globalThis.__hostmsg then calls this,
+// and we deliver the parsed JSON inside a synchronous flushSync commit.
+let __onHostMsg = () => {};
+globalThis.__registerHostMsg = (fn) => { __onHostMsg = fn; };
+globalThis.__wasmcraft_message = () =>
+  reconciler.flushSync(() => {
+    try { __onHostMsg(JSON.parse(globalThis.__hostmsg || "{}")); }
+    catch (e) { console.log("hostmsg parse error: " + e); }   // stderr only
+  });
