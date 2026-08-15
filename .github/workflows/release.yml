@@ -34,9 +34,14 @@ jobs:
           cp dist/pirun.lua     out/pirun.lua       # one-shot picat runner
           cp dist/sqlsh.lua     out/sqlsh.lua       # sqlite shell
           cp dist/wcsql.lua     out/wcsql.lua       # sqlite library
+          # web engine (HTML/CSS/JS/React on a monitor) — consumed in-game and
+          # by downstream apps (e.g. crabcraft cardui) via releases/latest
+          cp dist/browser.lua   out/browser.lua     # web page renderer / event loop
+          cp dist/webrender.lua out/webrender.lua   # pure frame-buffer renderer
           # wasm binaries
           cp wasm/picat.wasm    out/picat.wasm      # Picat 3.9 (wasm32-wasi)
           cp wasm/wq.wasm       out/wq.wasm         # SQLite 3.53 query engine
+          cp wasm/web.wasm      out/web.wasm        # web engine (QuickJS + draw protocol)
           (cd out && sha256sum * > SHA256SUMS)
           ls -la out
 

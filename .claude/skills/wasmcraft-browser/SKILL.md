@@ -100,12 +100,28 @@ const [n, setN] = useState(0);
 ```
 Tap targets must be block-level (a `<button>` is). Quit with `Q` / `Ctrl+T`.
 
+## Host → page data (web_message)
+
+`web_event` handlers get **0 args** and a **15-char** type, so they can't carry
+data. To push rich data into a running page, the host calls the `web_message`
+export with a JSON string; the engine sets `globalThis.__hostmsg` and calls
+`globalThis.__wasmcraft_message`, then re-styles and repaints (same tail as an
+event — no remount). Plain JS installs that hook directly; React apps register
+via `globalThis.__registerHostMsg((msg) => setState(msg))` (wired in
+`web/app/main.jsx`, alongside `__wasmcraft_flush`).
+
+```lua
+local p = wstr(inst, '{"ev":"granted","user":"alice"}')
+inst:call("web_message", p); inst:call("web_free", p)
+```
+
 ## Reactor / draw-protocol contract (for driving the engine directly)
 
 Exports: `_initialize`, then `web_init(pagePtr, width)` (render frame 1),
-`web_event(typePtr, x, y)` (deliver event, re-render), `web_malloc`/`web_free`
-(marshal C strings). stdout carries the draw protocol; stderr carries
-`console.log`. Drive it like `dist/browser.lua` does:
+`web_event(typePtr, x, y)` (deliver event, re-render), `web_message(jsonPtr)`
+(host→JS: set `globalThis.__hostmsg`, call `globalThis.__wasmcraft_message`,
+re-render), `web_malloc`/`web_free` (marshal C strings). stdout carries the draw
+protocol; stderr carries `console.log`. Drive it like `dist/browser.lua` does:
 
 ```lua
 inst:call("_initialize")

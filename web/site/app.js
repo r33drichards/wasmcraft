@@ -5486,6 +5486,18 @@
   });
   globalThis.__wasmcraft_flush = () => reconciler.flushSync(() => {
   });
+  var __onHostMsg = () => {
+  };
+  globalThis.__registerHostMsg = (fn) => {
+    __onHostMsg = fn;
+  };
+  globalThis.__wasmcraft_message = () => reconciler.flushSync(() => {
+    try {
+      __onHostMsg(JSON.parse(globalThis.__hostmsg || "{}"));
+    } catch (e) {
+      console.log("hostmsg parse error: " + e);
+    }
+  });
 })();
 /*! Bundled license information:
 
